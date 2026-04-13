@@ -100,7 +100,6 @@ export function AdminPanel() {
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Role</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Email</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Plant</th>
-                <th className="px-4 py-2" style={{ fontWeight: 500 }}>Status</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Actions</th>
               </tr>
             </thead>
@@ -111,7 +110,6 @@ export function AdminPanel() {
                   <td className="px-4 py-2.5">{user.role}</td>
                   <td className="px-4 py-2.5 text-[#6a6d70]">{user.email}</td>
                   <td className="px-4 py-2.5 text-[#6a6d70]">{user.plant || "All"}</td>
-                  <td className="px-4 py-2.5 text-[#6a6d70]">{user.status}</td>
                   <td className="px-4 py-2.5 flex gap-3">
                     <button className="text-[#0A6ED1] hover:underline inline-flex items-center gap-1 cursor-pointer" style={{ fontSize: 12 }}>
                       <Pencil size={12} /> View

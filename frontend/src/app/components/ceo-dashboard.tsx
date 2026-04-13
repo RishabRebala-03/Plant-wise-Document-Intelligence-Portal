@@ -174,7 +174,7 @@ export function CeoDashboard() {
         <table className="w-full">
           <thead>
             <tr className="bg-[#fafafa] text-left border-b border-[#f0f0f0]">
-              {["Document Name", "Plant", "Category", "Date", "Status"].map((heading) => (
+              {["Document Name", "Plant", "Category", "Date"].map((heading) => (
                 <th key={heading} className="px-5 py-3 text-[#6a6d70]" style={{ fontSize: 12, fontWeight: 500 }}>
                   {heading}
                 </th>
@@ -188,7 +188,6 @@ export function CeoDashboard() {
                 <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.plant}</td>
                 <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.category}</td>
                 <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.date || "-"}</td>
-                <td className="px-5 py-4 text-[#333]" style={{ fontSize: 13 }}>{document.status}</td>
               </tr>
             ))}
           </tbody>

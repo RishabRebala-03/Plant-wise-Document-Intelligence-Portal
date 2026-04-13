@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import {
-  Search, Filter, Eye, Download, Trash2, X, ChevronDown, Clock,
-  CheckCircle2, AlertCircle, FileText,
+  Search, Filter, Eye, Download, Trash2, X, ChevronDown,
 } from "lucide-react";
 import { categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
@@ -21,7 +20,6 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
   const [startInEditMode, setStartInEditMode] = useState(false);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
   const [filterPlant, setFilterPlant] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -32,7 +30,6 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
         scope: mine ? "mine" : undefined,
         q: search || undefined,
         category: filterCategory || undefined,
-        status: filterStatus || undefined,
         plant_id: !mine ? filterPlant || undefined : undefined,
       }),
       plantsApi.list(),
@@ -45,7 +42,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
     load()
       .catch((err) => setError(err instanceof Error ? err.message : "Unable to load documents."))
       .finally(() => setLoading(false));
-  }, [filterCategory, filterPlant, filterStatus, mine, search]);
+  }, [filterCategory, filterPlant, mine, search]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -110,16 +107,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
 
   const pageTitle = mine ? "My Documents" : "All Documents";
   const pageDesc = mine ? "Documents uploaded by you" : "All accessible documents";
-  const hasFilter = search || filterCategory || filterStatus || filterPlant;
-
-  const summary = useMemo(() => {
-    return {
-      total: documents.length,
-      approved: documents.filter((doc) => doc.status === "Approved").length,
-      inReview: documents.filter((doc) => doc.status === "In Review").length,
-      actionRequired: documents.filter((doc) => doc.status === "Action Required").length,
-    };
-  }, [documents]);
+  const hasFilter = search || filterCategory || filterPlant;
 
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading {pageTitle.toLowerCase()}...</div>;
   if (error) return <div className="p-7 text-[#BB0000]">{error}</div>;
@@ -138,31 +126,6 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
         >
           <Download size={14} /> Export
         </button>
-      </div>
-
-      <div className="grid grid-cols-4 gap-4 mb-7">
-        {[
-          { label: "Total", value: summary.total, icon: FileText, color: "#0A6ED1", bg: "#EBF4FD", status: "" },
-          { label: "Approved", value: summary.approved, icon: CheckCircle2, color: "#107E3E", bg: "#EBF5EF", status: "Approved" },
-          { label: "In Review", value: summary.inReview, icon: Clock, color: "#E9730C", bg: "#FEF3E7", status: "In Review" },
-          { label: "Action Required", value: summary.actionRequired, icon: AlertCircle, color: "#BB0000", bg: "#FFF0F0", status: "Action Required" },
-        ].map((stat) => (
-          <button
-            key={stat.label}
-            onClick={() => setFilterStatus(filterStatus === stat.status ? "" : stat.status)}
-            className={`bg-white border px-4 py-4 flex items-center gap-3 cursor-pointer transition-all text-left ${
-              filterStatus === stat.status && stat.status ? "border-[#0A6ED1] bg-[#EBF4FD]/30" : "border-[#e8e8e8]"
-            }`}
-          >
-            <div className="w-8 h-8 flex items-center justify-center shrink-0" style={{ background: stat.bg }}>
-              <stat.icon size={15} style={{ color: stat.color }} />
-            </div>
-            <div>
-              <div className="text-[#1a1a1a]" style={{ fontSize: 20, fontWeight: 600 }}>{stat.value}</div>
-              <div className="text-[#6a6d70]" style={{ fontSize: 11 }}>{stat.label}</div>
-            </div>
-          </button>
-        ))}
       </div>
 
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
@@ -212,7 +175,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
 
         {hasFilter && (
           <button
-            onClick={() => { setSearch(""); setFilterCategory(""); setFilterStatus(""); setFilterPlant(""); }}
+            onClick={() => { setSearch(""); setFilterCategory(""); setFilterPlant(""); }}
             className="h-9 px-3 text-[#BB0000] hover:bg-[#fff5f5] border border-[#e8c0c0] inline-flex items-center gap-1.5 cursor-pointer"
             style={{ fontSize: 13 }}
           >
@@ -224,9 +187,16 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
       <div className="bg-white border border-[#e8e8e8]">
         <div className="overflow-x-auto">
           <table className="w-full">
+            <colgroup>
+              <col className="w-[26%]" />
+              <col className="w-[20%]" />
+              <col className="w-[19%]" />
+              <col className="w-[17%]" />
+              <col className="w-[18%] min-w-[280px]" />
+            </colgroup>
             <thead>
               <tr className="bg-[#fafafa] border-b border-[#f0f0f0] text-left">
-                {["Document Name", "Plant", "Category", "Date", "Status", "Actions"].map((heading) => (
+                {["Document Name", "Plant", "Category", "Date", "Actions"].map((heading) => (
                   <th key={heading} className="px-5 py-3 text-[#6a6d70]" style={{ fontSize: 12, fontWeight: 500 }}>{heading}</th>
                 ))}
               </tr>
@@ -243,18 +213,17 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
                   <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.plant}</td>
                   <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.category}</td>
                   <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.date || "-"}</td>
-                  <td className="px-5 py-4 text-[#333]" style={{ fontSize: 13 }}>{document.status}</td>
                   <td className="px-5 py-4">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => void openDocumentDetails(document)} className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
+                    <div className="flex flex-wrap items-center gap-2 min-w-[280px]">
+                      <button onClick={() => void openDocumentDetails(document)} className="h-8 min-w-[120px] px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer" style={{ fontSize: 12 }}>
                         <Eye size={12} /> View Details
                       </button>
                       {document.file?.storageId && (
-                        <button onClick={() => void openOriginalDocument(document)} className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
+                        <button onClick={() => void openOriginalDocument(document)} className="h-8 min-w-[108px] px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer" style={{ fontSize: 12 }}>
                           <Download size={12} /> Open File
                         </button>
                       )}
-                      <button onClick={() => void deleteDocument(document.id)} className="h-8 px-3 border border-[#f0c0c0] text-[#BB0000] hover:bg-[#fff5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
+                      <button onClick={() => void deleteDocument(document.id)} className="h-8 min-w-[96px] px-3 border border-[#f0c0c0] text-[#BB0000] hover:bg-[#fff5f5] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer" style={{ fontSize: 12 }}>
                         <Trash2 size={12} /> Delete
                       </button>
                     </div>

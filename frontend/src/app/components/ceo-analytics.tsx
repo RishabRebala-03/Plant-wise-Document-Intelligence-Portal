@@ -1,22 +1,54 @@
 import { useEffect, useState } from "react";
-import { BarChart2, TrendingUp, Download, Calendar } from "lucide-react";
+import { BarChart2, TrendingUp, Activity, Calendar, RefreshCw } from "lucide-react";
 import { analyticsApi } from "../lib/api";
 import type { AnalyticsData } from "../lib/types";
 
 export function CeoAnalytics() {
+  const LIVE_REFRESH_INTERVAL_MS = 10000;
   const [period, setPeriod] = useState("6m");
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [liveViewEnabled, setLiveViewEnabled] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState("");
 
+  async function loadAnalytics(options?: { silent?: boolean }) {
+    if (options?.silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    setError("");
+    try {
+      const result = await analyticsApi.overview(period);
+      setData(result);
+      setLastSyncedAt(new Date().toLocaleTimeString());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load analytics.");
+    } finally {
+      if (options?.silent) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
-    setLoading(true);
-    analyticsApi
-      .overview(period)
-      .then(setData)
-      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load analytics."))
-      .finally(() => setLoading(false));
+    void loadAnalytics();
   }, [period]);
+
+  useEffect(() => {
+    if (!liveViewEnabled) return;
+
+    const timer = window.setInterval(() => {
+      void loadAnalytics({ silent: true });
+    }, LIVE_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [liveViewEnabled, period]);
 
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading analytics...</div>;
   if (error || !data) return <div className="p-7 text-[#BB0000]">{error || "Analytics unavailable."}</div>;
@@ -32,6 +64,11 @@ export function CeoAnalytics() {
           </h1>
           <p className="text-[#6a6d70] mt-1" style={{ fontSize: 14 }}>
             Backend-powered trends and distribution.
+          </p>
+          <p className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
+            {liveViewEnabled
+              ? `Live analytics is on. Refreshing every ${LIVE_REFRESH_INTERVAL_MS / 1000} seconds${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`
+              : `Live analytics is off${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -49,8 +86,17 @@ export function CeoAnalytics() {
               </button>
             ))}
           </div>
-          <button className="h-8 px-3 border border-[#d9d9d9] bg-white text-[#333] inline-flex items-center gap-1.5" style={{ fontSize: 12 }}>
-            <Download size={13} /> Live
+          <button
+            onClick={() => setLiveViewEnabled((prev) => !prev)}
+            className={`h-8 px-3 border inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+              liveViewEnabled
+                ? "border-[#0A6ED1] bg-[#EBF4FD] text-[#0A6ED1]"
+                : "border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5]"
+            }`}
+            style={{ fontSize: 12 }}
+          >
+            {refreshing ? <RefreshCw size={13} className="animate-spin" /> : <Activity size={13} />}
+            {liveViewEnabled ? "Live On" : "Live"}
           </button>
         </div>
       </div>

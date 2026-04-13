@@ -12,6 +12,7 @@ import { CeoPlants } from "./components/ceo-plants";
 import { CeoAnalytics } from "./components/ceo-analytics";
 import { CeoActivity } from "./components/ceo-activity";
 import { ManagerDashboard } from "./components/manager-dashboard";
+import { ManagerUpload } from "./components/manager-upload";
 import { ManagerDocuments } from "./components/manager-documents";
 import { AdminPanel } from "./components/admin-panel";
 import { SettingsPage } from "./components/settings-page";
@@ -38,7 +39,7 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
     {
       label: "Main",
       items: [
-        { label: "Overview", icon: LayoutDashboard, path: "/dashboard" },
+        { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
         { label: "Documents", icon: FileText, path: "/documents" },
         { label: "Plants", icon: Building2, path: "/plants" },
         { label: "Analytics", icon: BarChart2, path: "/analytics" },
@@ -54,6 +55,12 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
   ];
 
   const managerNav: NavGroup[] = [
+    {
+      label: "Main",
+      items: [
+        { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
+      ],
+    },
     {
       label: "Documents",
       items: [
@@ -351,7 +358,7 @@ function AppContent() {
     if (!user) return null;
     const role = user.role;
     const defaultPath =
-      role === "CEO" ? "/dashboard" : role === "Admin" ? "/admin" : "/manager";
+      role === "Admin" ? "/admin" : "/dashboard";
 
     return createBrowserRouter([
       {
@@ -359,15 +366,15 @@ function AppContent() {
         element: <Shell user={user} onLogout={() => { void logout(); }} />,
         children: [
           { index: true, element: <Navigate to={defaultPath} replace /> },
+          { path: "dashboard", element: role === "Mining Manager" ? <ManagerDashboard /> : <CeoDashboard /> },
           // CEO routes
-          { path: "dashboard", element: <CeoDashboard /> },
           { path: "documents", element: <CeoDocuments /> },
           { path: "plants", element: <CeoPlants /> },
           { path: "analytics", element: <CeoAnalytics /> },
           { path: "activity", element: <CeoActivity /> },
           { path: "settings", element: <SettingsPage /> },
           // Manager routes
-          { path: "manager", element: <ManagerDashboard /> },
+          { path: "manager", element: <ManagerUpload /> },
           { path: "manager/docs", element: <ManagerDocuments mine /> },
           { path: "manager/all", element: <ManagerDocuments mine={false} /> },
           { path: "manager/settings", element: <SettingsPage /> },
