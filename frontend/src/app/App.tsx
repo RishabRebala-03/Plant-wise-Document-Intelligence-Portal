@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createBrowserRouter, RouterProvider, Navigate, Outlet, useNavigate, useLocation } from "react-router";
 import {
   LayoutDashboard, FileText, Building2, BarChart2, Settings,
@@ -10,12 +10,14 @@ import { CeoDashboard } from "./components/ceo-dashboard";
 import { CeoDocuments } from "./components/ceo-documents";
 import { CeoPlants } from "./components/ceo-plants";
 import { CeoAnalytics } from "./components/ceo-analytics";
+import { CeoActivity } from "./components/ceo-activity";
 import { ManagerDashboard } from "./components/manager-dashboard";
 import { ManagerDocuments } from "./components/manager-documents";
 import { AdminPanel } from "./components/admin-panel";
 import { SettingsPage } from "./components/settings-page";
 import { AuthProvider, useAuth } from "./lib/auth";
-import type { User } from "./lib/types";
+import { notificationsApi } from "./lib/api";
+import type { NotificationItem, User } from "./lib/types";
 
 type NavGroup = {
   label?: string;
@@ -25,6 +27,9 @@ type NavGroup = {
 function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [collapsed, setCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [liveNotifications, setLiveNotifications] = useState<NotificationItem[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
   const role = user.role;
@@ -37,6 +42,7 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
         { label: "Documents", icon: FileText, path: "/documents" },
         { label: "Plants", icon: Building2, path: "/plants" },
         { label: "Analytics", icon: BarChart2, path: "/analytics" },
+        { label: "Activity Logs", icon: Clock, path: "/activity" },
       ],
     },
     {
@@ -54,7 +60,6 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
         { label: "Upload Document", icon: Upload, path: "/manager" },
         { label: "My Documents", icon: FolderOpen, path: "/manager/docs" },
         { label: "All Documents", icon: FileText, path: "/manager/all" },
-        { label: "Recent Activity", icon: Clock, path: "/manager/activity" },
       ],
     },
     {
@@ -78,9 +83,40 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
   const navGroups =
     role === "CEO" ? ceoNav : role === "Mining Manager" ? managerNav : adminNav;
 
+  const settingsPath =
+    role === "CEO" ? "/settings" : role === "Mining Manager" ? "/manager/settings" : "/admin/settings";
+
   const userName = user.name;
   const initials = user.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const plant = user.plant || (role === "CEO" ? "All Plants" : "System");
+
+  useEffect(() => {
+    let active = true;
+    async function loadNotifications() {
+      try {
+        const result = await notificationsApi.list();
+        if (!active) return;
+        setLiveNotifications(result.items);
+        setUnreadNotifications(result.unreadCount);
+      } catch {
+        if (!active) return;
+        setLiveNotifications([]);
+        setUnreadNotifications(0);
+      }
+    }
+
+    void loadNotifications();
+    const timer = window.setInterval(() => {
+      void loadNotifications();
+    }, 30000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [role]);
+  const visibleNotifications = liveNotifications;
+  const notificationBadgeCount = unreadNotifications;
 
   return (
     <div className="h-screen flex flex-col" style={{ background: "#f2f4f7" }}>
@@ -104,16 +140,93 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
 
         <div className="flex items-center gap-5">
-          <button className="relative text-white/60 hover:text-white transition-colors cursor-pointer">
-            <Bell size={17} />
-            <span className="absolute -top-1 -right-1 w-2 h-2 bg-[#E9730C] rounded-full border border-[#354A5F]" />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setNotificationsOpen(!notificationsOpen);
+                setProfileOpen(false);
+              }}
+              className="relative text-white/60 hover:text-white transition-colors cursor-pointer"
+            >
+              <Bell size={17} />
+              {notificationBadgeCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-[#E9730C] rounded-full border border-[#354A5F] text-[10px] leading-[14px] text-white text-center">
+                  {notificationBadgeCount}
+                </span>
+              )}
+            </button>
+            {notificationsOpen && (
+              <div className="absolute right-0 top-10 w-80 bg-white border border-[#d9d9d9] shadow-lg z-50">
+                <div className="px-4 py-3 border-b border-[#f0f0f0] flex items-center justify-between">
+                  <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 600 }}>
+                    Notifications
+                  </div>
+                  <button
+                    onClick={() => {
+                      setNotificationsOpen(false);
+                      navigate(`${settingsPath}?tab=notifications`);
+                    }}
+                    className="text-[#0A6ED1] cursor-pointer"
+                    style={{ fontSize: 12 }}
+                  >
+                    Manage
+                  </button>
+                </div>
+                {visibleNotifications.length > 0 ? (
+                  <div className="py-1">
+                    {visibleNotifications.map((notification) => (
+                      <button
+                        key={notification.id}
+                        onClick={async () => {
+                          if (role === "Mining Manager" && !notification.read) {
+                            try {
+                              await notificationsApi.markRead(notification.id);
+                              setLiveNotifications((prev) =>
+                                prev.map((item) => item.id === notification.id ? { ...item, read: true } : item),
+                              );
+                              setUnreadNotifications((prev) => Math.max(0, prev - 1));
+                            } catch {
+                              // Keep navigation responsive even if marking read fails.
+                            }
+                          }
+                          setNotificationsOpen(false);
+                          navigate(notification.href);
+                        }}
+                        className={`w-full px-4 py-3 border-b last:border-b-0 border-[#f5f5f5] text-left hover:bg-[#f7f9fc] cursor-pointer ${
+                          !notification.read ? "bg-[#fff7f7]" : ""
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>
+                            {notification.title}
+                          </div>
+                          {!notification.read && (
+                            <span className="w-2.5 h-2.5 rounded-full bg-[#BB0000] shrink-0" />
+                          )}
+                        </div>
+                        <div className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
+                          {notification.detail}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-4 py-4 text-[#6a6d70]" style={{ fontSize: 12 }}>
+                    No active notifications. Turn them on in Preferences.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="w-px h-5 bg-white/20" />
 
           <div className="relative">
             <button
-              onClick={() => setProfileOpen(!profileOpen)}
+              onClick={() => {
+                setProfileOpen(!profileOpen);
+                setNotificationsOpen(false);
+              }}
               className="flex items-center gap-2.5 cursor-pointer"
             >
               <div
@@ -139,8 +252,26 @@ function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <div className="text-[#6a6d70]" style={{ fontSize: 11 }}>{plant}</div>
                 </div>
                 <div className="py-1">
-                  <button className="w-full px-4 py-2 text-left text-[#333] hover:bg-[#f5f5f5] cursor-pointer" style={{ fontSize: 13 }}>Profile</button>
-                  <button className="w-full px-4 py-2 text-left text-[#333] hover:bg-[#f5f5f5] cursor-pointer" style={{ fontSize: 13 }}>Preferences</button>
+                  <button
+                    onClick={() => {
+                      setProfileOpen(false);
+                      navigate(`${settingsPath}?tab=profile`);
+                    }}
+                    className="w-full px-4 py-2 text-left text-[#333] hover:bg-[#f5f5f5] cursor-pointer"
+                    style={{ fontSize: 13 }}
+                  >
+                    Profile
+                  </button>
+                  <button
+                    onClick={() => {
+                      setProfileOpen(false);
+                      navigate(`${settingsPath}?tab=notifications`);
+                    }}
+                    className="w-full px-4 py-2 text-left text-[#333] hover:bg-[#f5f5f5] cursor-pointer"
+                    style={{ fontSize: 13 }}
+                  >
+                    Preferences
+                  </button>
                   <div className="border-t border-[#f0f0f0] mt-1 pt-1">
                     <button
                       onClick={() => { setProfileOpen(false); onLogout(); }}
@@ -233,12 +364,12 @@ function AppContent() {
           { path: "documents", element: <CeoDocuments /> },
           { path: "plants", element: <CeoPlants /> },
           { path: "analytics", element: <CeoAnalytics /> },
+          { path: "activity", element: <CeoActivity /> },
           { path: "settings", element: <SettingsPage /> },
           // Manager routes
           { path: "manager", element: <ManagerDashboard /> },
           { path: "manager/docs", element: <ManagerDocuments mine /> },
           { path: "manager/all", element: <ManagerDocuments mine={false} /> },
-          { path: "manager/activity", element: <ManagerDocuments mine={false} activity /> },
           { path: "manager/settings", element: <SettingsPage /> },
           // Admin routes
           { path: "admin", element: <AdminPanel /> },

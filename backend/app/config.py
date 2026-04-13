@@ -16,7 +16,9 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
 
 class Config:
     API_PREFIX = "/api/v1"
+    ENV = os.getenv("FLASK_ENV", "development").strip().lower()
     DEBUG = _as_bool(os.getenv("DEBUG"), False)
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
     TOKEN_SALT = os.getenv("TOKEN_SALT", "midwest-docs-api")
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")

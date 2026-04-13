@@ -13,6 +13,26 @@ from ..utils import ensure_utc, success_response, utc_now
 dashboard_bp = Blueprint("dashboard", __name__)
 
 
+def _enrich_activity(activity: dict, db) -> dict:
+    enriched = dict(activity)
+    document_id = enriched.get("document_id")
+    document = db.documents.find_one({"id": document_id}) if document_id else None
+    metadata = dict(enriched.get("metadata") or {})
+    if document:
+        metadata.setdefault("plantId", document.get("plant_id"))
+        metadata.setdefault("plantName", document.get("plant_name"))
+        metadata.setdefault("documentCategory", document.get("category"))
+        metadata.setdefault("documentStatus", document.get("status"))
+        metadata.setdefault("version", document.get("version"))
+        metadata.setdefault("fileName", document.get("file_name") or document.get("name"))
+        metadata.setdefault("contentType", document.get("content_type") or "Not available")
+        metadata.setdefault("sizeBytes", document.get("size_bytes"))
+        metadata.setdefault("uploadComment", document.get("upload_comment") or "Not available")
+        enriched.setdefault("document_name", document.get("name"))
+    enriched["metadata"] = metadata
+    return enriched
+
+
 @dashboard_bp.get("/dashboard/ceo")
 @require_auth(["CEO", "Admin"])
 def ceo_dashboard():
@@ -79,6 +99,6 @@ def manager_dashboard():
                 "approved": approved,
             },
             "recentUploads": [serialize_document(document, []) for document in my_documents[:5]],
-            "activity": [serialize_activity(activity) for activity in activities],
+            "activity": [serialize_activity(_enrich_activity(activity, db)) for activity in activities],
         }
     )

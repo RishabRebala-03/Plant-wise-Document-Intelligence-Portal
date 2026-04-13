@@ -13,6 +13,38 @@ from ..utils import error_response, get_pagination, parse_bool, parse_json_body,
 documents_bp = Blueprint("documents", __name__)
 
 
+def _log_document_event(level: str, message: str, **details):
+    logger = current_app.logger
+    log_method = getattr(logger, level.lower(), logger.info)
+    context = ", ".join(f"{key}={value!r}" for key, value in details.items() if value is not None)
+    log_method(f"{message}{' | ' + context if context else ''}")
+
+
+def _user_log_context(user: dict | None) -> dict:
+    if not user:
+        return {}
+    return {
+        "userId": user.get("id"),
+        "userName": user.get("name"),
+        "userRole": user.get("role"),
+        "userPlantId": user.get("plant_id"),
+    }
+
+
+def _document_log_context(document: dict | None) -> dict:
+    if not document:
+        return {}
+    return {
+        "documentId": document.get("id"),
+        "documentName": document.get("name"),
+        "documentStatus": document.get("status"),
+        "documentVersion": document.get("version"),
+        "plantId": document.get("plant_id"),
+        "plantName": document.get("plant_name"),
+        "category": document.get("category"),
+    }
+
+
 def _record_activity(action: str, document: dict, user: dict, metadata: dict | None = None):
     db = get_db()
     db.activities.insert_one(
@@ -25,10 +57,131 @@ def _record_activity(action: str, document: dict, user: dict, metadata: dict | N
             "document_name": document["name"],
             "user_id": user["id"],
             "user_name": user["name"],
-            "metadata": metadata or {},
+            "metadata": {
+                "documentCategory": document.get("category"),
+                "documentStatus": document.get("status"),
+                "plantId": document.get("plant_id"),
+                "plantName": document.get("plant_name"),
+                "version": document.get("version"),
+                **(metadata or {}),
+            },
             "created_at": utc_now(),
         }
     )
+
+
+def _create_manager_notifications_for_comment(
+    document: dict,
+    user: dict,
+    visibility: str,
+    text: str,
+    *,
+    source_comment_id: str | None = None,
+    created_at=None,
+):
+    db = get_db()
+    if visibility != "public":
+        return
+
+    recipient_map = {}
+
+    for recipient in db.users.find(
+        {
+            "role": "Mining Manager",
+            "status": "Active",
+            "plant_id": document.get("plant_id"),
+        }
+    ):
+        recipient_map[recipient["id"]] = recipient
+
+    uploaded_by_id = document.get("uploaded_by_id")
+    if uploaded_by_id:
+        uploader = db.users.find_one(
+            {
+                "id": uploaded_by_id,
+                "role": "Mining Manager",
+                "status": "Active",
+            }
+        )
+        if uploader:
+            recipient_map[uploader["id"]] = uploader
+
+    recipients = list(recipient_map.values())
+    now = created_at or utc_now()
+    detail = (
+        f"{user['name']} commented: {text[:80]}{'...' if len(text) > 80 else ''}"
+    )
+    for recipient in recipients:
+        if source_comment_id and db.notifications.find_one(
+            {"user_id": recipient["id"], "source_comment_id": source_comment_id}
+        ):
+            continue
+        db.notifications.insert_one(
+            {
+                "id": next_public_id("notifications", "NTF"),
+                "user_id": recipient["id"],
+                "title": "CEO comment added",
+                "detail": detail,
+                "href": f"/manager/all?docId={document['id']}&edit=1",
+                "document_id": document["id"],
+                "source_comment_id": source_comment_id,
+                "type": "ceo_comment",
+                "read": False,
+                "created_at": now,
+                "read_at": None,
+            }
+        )
+
+
+def backfill_ceo_comment_notifications() -> int:
+    db = get_db()
+    created = 0
+    comments = db.comments.find({"role": "CEO", "visibility": "public"}).sort("created_at", 1)
+
+    for comment in comments:
+        comment_id = comment.get("id")
+        if comment_id and db.notifications.find_one({"source_comment_id": comment_id}):
+            continue
+
+        document = db.documents.find_one({"id": comment["document_id"], "deleted_at": None})
+        if not document:
+            continue
+
+        author = db.users.find_one({"id": comment["author_id"], "role": "CEO"})
+        if not author:
+            continue
+
+        before = db.notifications.count_documents({"source_comment_id": comment_id})
+        _create_manager_notifications_for_comment(
+            document,
+            author,
+            comment.get("visibility", "private"),
+            comment.get("text", ""),
+            source_comment_id=comment_id,
+            created_at=comment.get("created_at"),
+        )
+        after = db.notifications.count_documents({"source_comment_id": comment_id})
+        created += max(0, after - before)
+
+    return created
+
+
+def cleanup_manager_comment_notifications() -> int:
+    db = get_db()
+    removed = 0
+    notifications = db.notifications.find({"type": "ceo_comment"})
+
+    for notification in notifications:
+        source_comment_id = notification.get("source_comment_id")
+        if not source_comment_id:
+            continue
+
+        comment = db.comments.find_one({"id": source_comment_id})
+        if not comment or comment.get("role") != "CEO" or comment.get("visibility") != "public":
+            db.notifications.delete_one({"id": notification["id"]})
+            removed += 1
+
+    return removed
 
 
 def _document_query_for_user(user: dict) -> dict:
@@ -40,10 +193,9 @@ def _document_query_for_user(user: dict) -> dict:
 
 def _visible_comments(document_id: str, user: dict) -> list[dict]:
     db = get_db()
-    query = {"document_id": document_id}
-    if user["role"] not in {"CEO", "Admin"}:
-        query["visibility"] = "public"
-    return list(db.comments.find(query).sort("created_at", -1))
+    if user["role"] in {"CEO", "Admin"}:
+        return list(db.comments.find({"document_id": document_id}).sort("created_at", -1))
+    return list(db.comments.find({"document_id": document_id, "visibility": "public"}).sort("created_at", -1))
 
 
 def _can_manage_document(user: dict, document: dict) -> bool:
@@ -159,16 +311,58 @@ def create_document():
     upload_comment = (form.get("uploadComment") or form.get("comments") or "").strip()
     company = (form.get("company") or "Midwest Ltd").strip()
     status = (form.get("status") or "In Review").strip()
+    _log_document_event(
+        "info",
+        "Document upload request received",
+        **_user_log_context(user),
+        requestedPlantId=plant_id,
+        requestedPlantName=plant_name,
+        documentName=name,
+        category=category,
+        hasFile=bool(request.files.get("file")),
+        requestedStatus=status,
+    )
 
     if not name or not category:
+        _log_document_event(
+            "warning",
+            "Document upload validation failed",
+            **_user_log_context(user),
+            reason="missing_name_or_category",
+            documentName=name,
+            category=category,
+        )
         return error_response("Document name and category are required", 400)
     if not plant_id and not plant_name:
+        _log_document_event(
+            "warning",
+            "Document upload validation failed",
+            **_user_log_context(user),
+            reason="missing_plant_selection",
+            documentName=name,
+        )
         return error_response("Plant selection is required", 400)
 
     plant = db.plants.find_one({"id": plant_id}) if plant_id else db.plants.find_one({"name": plant_name})
     if not plant:
+        _log_document_event(
+            "warning",
+            "Document upload failed because plant was not found",
+            **_user_log_context(user),
+            requestedPlantId=plant_id,
+            requestedPlantName=plant_name,
+            documentName=name,
+        )
         return error_response("Plant not found", 404)
     if user["role"] == "Mining Manager" and user.get("plant_id") and user["plant_id"] != plant["id"]:
+        _log_document_event(
+            "warning",
+            "Document upload denied due to plant mismatch",
+            **_user_log_context(user),
+            requestedPlantId=plant["id"],
+            requestedPlantName=plant["name"],
+            documentName=name,
+        )
         return error_response("Managers can only upload documents for their assigned plant", 403)
 
     file = request.files.get("file")
@@ -179,11 +373,44 @@ def create_document():
     if file and file.filename:
         data = file.read()
         size_bytes = len(data)
+        _log_document_event(
+            "info",
+            "Document file received for upload",
+            **_user_log_context(user),
+            fileName=file.filename,
+            contentType=file.mimetype,
+            sizeBytes=size_bytes,
+            maxAllowedBytes=current_app.config["MAX_CONTENT_LENGTH"],
+        )
         if size_bytes > current_app.config["MAX_CONTENT_LENGTH"]:
+            _log_document_event(
+                "warning",
+                "Document upload rejected because file is too large",
+                **_user_log_context(user),
+                fileName=file.filename,
+                sizeBytes=size_bytes,
+                maxAllowedBytes=current_app.config["MAX_CONTENT_LENGTH"],
+            )
             return error_response("Uploaded file exceeds the configured size limit", 413)
         file_storage_id = get_fs().upload_from_stream(file.filename, io.BytesIO(data), metadata={"content_type": file.mimetype})
         file_name = file.filename
         content_type = file.mimetype
+        _log_document_event(
+            "info",
+            "Document file stored in GridFS",
+            **_user_log_context(user),
+            fileName=file_name,
+            contentType=content_type,
+            sizeBytes=size_bytes,
+            storageId=str(file_storage_id),
+        )
+    else:
+        _log_document_event(
+            "info",
+            "Document upload continuing without attached file",
+            **_user_log_context(user),
+            documentName=name,
+        )
 
     now = utc_now()
     document = {
@@ -207,12 +434,41 @@ def create_document():
         "updated_at": now,
         "deleted_at": None,
     }
+    _log_document_event(
+        "info",
+        "Document metadata prepared for persistence",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        fileName=file_name,
+        contentType=content_type,
+        sizeBytes=size_bytes,
+        uploadCommentPresent=bool(upload_comment),
+    )
     db.documents.insert_one(document)
     db.plants.update_one(
         {"id": plant["id"]},
         {"$inc": {"documents_count": 1}, "$set": {"last_upload_at": now, "updated_at": now}},
     )
-    _record_activity("Uploaded", document, user)
+    _record_activity(
+        "Uploaded",
+        document,
+        user,
+        {
+            "uploadComment": document.get("upload_comment"),
+            "fileName": document.get("file_name"),
+            "contentType": document.get("content_type"),
+            "sizeBytes": document.get("size_bytes"),
+        },
+    )
+    _log_document_event(
+        "info",
+        "Document upload completed successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        fileName=document.get("file_name"),
+        contentType=document.get("content_type"),
+        sizeBytes=document.get("size_bytes"),
+    )
     return success_response(serialize_document(document, []), 201)
 
 
@@ -221,11 +477,20 @@ def create_document():
 def get_document(document_id: str):
     user = current_user()
     db = get_db()
+    _log_document_event("info", "Document detail requested", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document detail request failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
     comments = _visible_comments(document_id, user)
-    _record_activity("Viewed", document, user)
+    _record_activity("Viewed", document, user, {"viewMode": "document"})
+    _log_document_event(
+        "info",
+        "Document detail returned successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        visibleComments=len(comments),
+    )
     return success_response({"document": serialize_document(document, comments), "comments": [serialize_comment(c) for c in comments]})
 
 
@@ -234,10 +499,19 @@ def get_document(document_id: str):
 def update_document(document_id: str):
     user = current_user()
     db = get_db()
+    _log_document_event("info", "Document update request received", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document update failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
     if not _can_manage_document(user, document):
+        _log_document_event(
+            "warning",
+            "Document update denied",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            reason="permission_denied",
+        )
         return error_response("You do not have permission to update this document", 403)
 
     body = request.form.to_dict() if request.files or request.form else parse_json_body()
@@ -250,14 +524,50 @@ def update_document(document_id: str):
     status = body.get("status")
     if status is not None:
         if user["role"] not in {"CEO", "Admin"} and status != document.get("status"):
+            _log_document_event(
+                "warning",
+                "Document status change denied",
+                **_user_log_context(user),
+                **_document_log_context(document),
+                requestedStatus=status,
+                currentStatus=document.get("status"),
+            )
             return error_response("Only executives and admins can change document status", 403)
         updates["status"] = status
+        _log_document_event(
+            "info",
+            "Document status change requested",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            previousStatus=document.get("status"),
+            requestedStatus=status,
+            approvalAction=status == "Approved",
+        )
 
     file = request.files.get("file")
     if file and file.filename:
         data = file.read()
         size_bytes = len(data)
+        _log_document_event(
+            "info",
+            "Replacement file received for document update",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            fileName=file.filename,
+            contentType=file.mimetype,
+            sizeBytes=size_bytes,
+            nextVersion=int(document.get("version", 1)) + 1,
+        )
         if size_bytes > current_app.config["MAX_CONTENT_LENGTH"]:
+            _log_document_event(
+                "warning",
+                "Document update rejected because replacement file is too large",
+                **_user_log_context(user),
+                **_document_log_context(document),
+                fileName=file.filename,
+                sizeBytes=size_bytes,
+                maxAllowedBytes=current_app.config["MAX_CONTENT_LENGTH"],
+            )
             return error_response("Uploaded file exceeds the configured size limit", 413)
         file_storage_id = get_fs().upload_from_stream(file.filename, io.BytesIO(data), metadata={"content_type": file.mimetype})
         updates.update(
@@ -269,14 +579,55 @@ def update_document(document_id: str):
                 "version": int(document.get("version", 1)) + 1,
             }
         )
+        _log_document_event(
+            "info",
+            "Replacement file stored in GridFS",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            fileName=file.filename,
+            contentType=file.mimetype,
+            sizeBytes=size_bytes,
+            storageId=str(file_storage_id),
+            nextVersion=updates["version"],
+        )
 
     if not updates:
+        _log_document_event(
+            "warning",
+            "Document update request contained no changes",
+            **_user_log_context(user),
+            **_document_log_context(document),
+        )
         return error_response("No updates were supplied", 400)
 
     updates["updated_at"] = utc_now()
+    changed_fields = sorted(updates.keys())
+    previous_status = document.get("status")
     db.documents.update_one({"id": document_id}, {"$set": updates})
     updated = db.documents.find_one({"id": document_id})
-    _record_activity("Updated", updated, user, {"updatedFields": sorted(updates.keys())})
+    _record_activity(
+        "Updated",
+        updated,
+        user,
+        {
+            "updatedFields": sorted(updates.keys()),
+            "fileName": updated.get("file_name"),
+            "contentType": updated.get("content_type"),
+            "sizeBytes": updated.get("size_bytes"),
+        },
+    )
+    _log_document_event(
+        "info",
+        "Document update completed successfully",
+        **_user_log_context(user),
+        **_document_log_context(updated),
+        previousStatus=previous_status,
+        updatedFields=changed_fields,
+        fileName=updated.get("file_name"),
+        contentType=updated.get("content_type"),
+        sizeBytes=updated.get("size_bytes"),
+        approvalCompleted=previous_status != updated.get("status") and updated.get("status") == "Approved",
+    )
     comments = _visible_comments(document_id, user)
     return success_response(serialize_document(updated, comments))
 
@@ -286,16 +637,32 @@ def update_document(document_id: str):
 def delete_document(document_id: str):
     user = current_user()
     db = get_db()
+    _log_document_event("info", "Document delete request received", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document delete failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
     if not _can_manage_document(user, document):
+        _log_document_event(
+            "warning",
+            "Document delete denied",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            reason="permission_denied",
+        )
         return error_response("You do not have permission to delete this document", 403)
 
     now = utc_now()
     db.documents.update_one({"id": document_id}, {"$set": {"deleted_at": now, "updated_at": now}})
     db.plants.update_one({"id": document["plant_id"]}, {"$inc": {"documents_count": -1}, "$set": {"updated_at": now}})
-    _record_activity("Deleted", document, user)
+    _record_activity("Deleted", document, user, {"deletedAt": now.isoformat()})
+    _log_document_event(
+        "info",
+        "Document deleted successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        deletedAt=now.isoformat(),
+    )
     return success_response({"message": "Document deleted"})
 
 
@@ -303,16 +670,43 @@ def delete_document(document_id: str):
 @require_auth()
 def download_document(document_id: str):
     db = get_db()
+    user = current_user()
+    _log_document_event("info", "Document download requested", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document download failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
     if not document.get("file_storage_id"):
+        _log_document_event(
+            "warning",
+            "Document download failed because file is missing",
+            **_user_log_context(user),
+            **_document_log_context(document),
+        )
         return error_response("No file is attached to this document", 404)
 
     stream = io.BytesIO()
     get_fs().download_to_stream(document["file_storage_id"], stream)
     stream.seek(0)
-    _record_activity("Downloaded", document, current_user())
+    _record_activity(
+        "Downloaded",
+        document,
+        user,
+        {
+            "fileName": document.get("file_name"),
+            "contentType": document.get("content_type"),
+            "sizeBytes": document.get("size_bytes"),
+        },
+    )
+    _log_document_event(
+        "info",
+        "Document download prepared successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        fileName=document.get("file_name"),
+        contentType=document.get("content_type"),
+        sizeBytes=document.get("size_bytes"),
+    )
     return send_file(
         stream,
         download_name=document.get("file_name") or f"{document_id}.bin",
@@ -325,10 +719,20 @@ def download_document(document_id: str):
 @require_auth()
 def list_comments(document_id: str):
     db = get_db()
+    user = current_user()
+    _log_document_event("info", "Document comments requested", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document comments request failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
-    comments = _visible_comments(document_id, current_user())
+    comments = _visible_comments(document_id, user)
+    _log_document_event(
+        "info",
+        "Document comments returned successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        visibleComments=len(comments),
+    )
     return success_response([serialize_comment(comment) for comment in comments])
 
 
@@ -337,16 +741,33 @@ def list_comments(document_id: str):
 def add_comment(document_id: str):
     user = current_user()
     db = get_db()
+    _log_document_event("info", "Document comment request received", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
+        _log_document_event("warning", "Document comment failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
 
     body = parse_json_body()
     text = (body.get("text") or "").strip()
     visibility = body.get("visibility", "private")
     if not text:
+        _log_document_event(
+            "warning",
+            "Document comment validation failed",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            reason="missing_text",
+        )
         return error_response("Comment text is required", 400)
     if visibility not in {"private", "public"}:
+        _log_document_event(
+            "warning",
+            "Document comment validation failed",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            reason="invalid_visibility",
+            visibility=visibility,
+        )
         return error_response("Visibility must be either private or public", 400)
 
     now = utc_now()
@@ -362,5 +783,39 @@ def add_comment(document_id: str):
         "updated_at": now,
     }
     db.comments.insert_one(comment)
-    _record_activity("Commented", document, user, {"visibility": visibility})
+    if user["role"] == "CEO":
+        _create_manager_notifications_for_comment(
+            document,
+            user,
+            visibility,
+            text,
+            source_comment_id=comment["id"],
+            created_at=now,
+        )
+        _log_document_event(
+            "info",
+            "CEO comment notification workflow executed",
+            **_user_log_context(user),
+            **_document_log_context(document),
+            visibility=visibility,
+            commentId=comment["id"],
+        )
+    _record_activity(
+        "Commented",
+        document,
+        user,
+        {
+            "visibility": visibility,
+            "commentLength": len(text),
+        },
+    )
+    _log_document_event(
+        "info",
+        "Document comment added successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        commentId=comment["id"],
+        visibility=visibility,
+        commentLength=len(text),
+    )
     return success_response(serialize_comment(comment), 201)

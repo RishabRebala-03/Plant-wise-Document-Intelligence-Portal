@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Upload, FileText, Clock, CheckCircle2,
-  CloudUpload, ArrowRight,
+  CloudUpload, ArrowRight, Paperclip,
 } from "lucide-react";
 import { categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -19,7 +19,9 @@ export function ManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<"success" | "error" | "">("");
   const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [form, setForm] = useState({
     company: "Midwest Ltd",
     plant: user?.plantId || "",
@@ -27,6 +29,17 @@ export function ManagerDashboard() {
     category: "",
     comments: "",
   });
+
+  function handleSelectedFile(nextFile: File | null) {
+    setFile(nextFile);
+    if (!nextFile) return;
+
+    const inferredName = nextFile.name.replace(/\.[^.]+$/, "");
+    setForm((prev) => ({
+      ...prev,
+      name: prev.name.trim() ? prev.name : inferredName,
+    }));
+  }
 
   async function load() {
     const [dashboard, plantsResult] = await Promise.all([dashboardApi.manager(), plantsApi.list()]);
@@ -36,7 +49,10 @@ export function ManagerDashboard() {
 
   useEffect(() => {
     load()
-      .catch((err) => setMessage(err instanceof Error ? err.message : "Unable to load manager dashboard."))
+      .catch((err) => {
+        setMessage(err instanceof Error ? err.message : "Unable to load manager dashboard.");
+        setMessageType("error");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -50,6 +66,12 @@ export function ManagerDashboard() {
     e.preventDefault();
     if (!form.plant || !form.name || !form.category) {
       setMessage("Please fill in plant, document name, and category.");
+      setMessageType("error");
+      return;
+    }
+    if (!file) {
+      setMessage("Please choose a file to upload.");
+      setMessageType("error");
       return;
     }
 
@@ -59,12 +81,13 @@ export function ManagerDashboard() {
     formData.append("name", form.name);
     formData.append("category", form.category);
     formData.append("comments", form.comments);
-    if (file) formData.append("file", file);
+    formData.append("file", file);
 
     setSubmitting(true);
     setMessage("");
+    setMessageType("");
     try {
-      await documentsApi.create(formData);
+      const created = await documentsApi.create(formData);
       setForm({
         company: "Midwest Ltd",
         plant: user?.plantId || "",
@@ -73,16 +96,26 @@ export function ManagerDashboard() {
         comments: "",
       });
       setFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       setMessage("Document uploaded successfully.");
+      setMessageType("success");
       await load();
+      await openDocument(created);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Upload failed.");
+      setMessageType("error");
     } finally {
       setSubmitting(false);
     }
   }
 
   async function openDocument(document: DocumentRecord) {
+    if (document.file?.storageId) {
+      await documentsApi.openFileInNewTab(document.id);
+      return;
+    }
     const result = await documentsApi.get(document.id);
     setSelectedDoc(result.document);
   }
@@ -142,14 +175,23 @@ export function ManagerDashboard() {
 
             <div className="p-5">
               <div
+                role="button"
+                tabIndex={0}
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOver(false);
-                  setFile(e.dataTransfer.files[0] || null);
+                  handleSelectedFile(e.dataTransfer.files[0] || null);
                 }}
-                className={`border-2 border-dashed mb-6 flex flex-col items-center justify-center py-8 transition-colors ${
+                className={`border-2 border-dashed mb-6 flex flex-col items-center justify-center py-8 transition-colors cursor-pointer ${
                   dragOver ? "border-[#0A6ED1] bg-[#EBF4FD]" : "border-[#d9d9d9] bg-[#fafafa]"
                 }`}
               >
@@ -160,6 +202,23 @@ export function ManagerDashboard() {
                 <p className="text-[#999] mt-1" style={{ fontSize: 11 }}>
                   Supports PDF, DOCX, XLSX, PNG up to 25 MB
                 </p>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                  className="mt-3 h-9 px-4 border border-[#0A6ED1] text-[#0A6ED1] bg-white hover:bg-[#EBF4FD] cursor-pointer"
+                  style={{ fontSize: 13, fontWeight: 500 }}
+                >
+                  Choose Document
+                </button>
+                {file && (
+                  <div className="mt-3 inline-flex items-center gap-2 px-3 py-2 bg-white border border-[#d9d9d9] text-[#333]" style={{ fontSize: 12 }}>
+                    <Paperclip size={12} />
+                    {file.name}
+                  </div>
+                )}
               </div>
 
               <form onSubmit={handleUpload}>
@@ -222,7 +281,12 @@ export function ManagerDashboard() {
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-[#444] mb-1.5" style={{ fontSize: 13, fontWeight: 500 }}>File</label>
-                    <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                      onChange={(e) => handleSelectedFile(e.target.files?.[0] || null)}
+                    />
                     {file && <div className="text-[#6a6d70] mt-2" style={{ fontSize: 12 }}>{file.name}</div>}
                   </div>
                 </div>
@@ -231,7 +295,14 @@ export function ManagerDashboard() {
                   <button type="submit" disabled={submitting} className="h-9 px-5 bg-[#0A6ED1] text-white hover:bg-[#0854A0] inline-flex items-center gap-2 cursor-pointer transition-colors disabled:opacity-60" style={{ fontSize: 13, fontWeight: 500 }}>
                     <Upload size={14} /> {submitting ? "Submitting..." : "Submit Document"}
                   </button>
-                  {message && <span className="text-[#6a6d70]" style={{ fontSize: 13 }}>{message}</span>}
+                  {message && (
+                    <span
+                      className={messageType === "error" ? "text-[#BB0000]" : messageType === "success" ? "text-[#107E3E]" : "text-[#6a6d70]"}
+                      style={{ fontSize: 13 }}
+                    >
+                      {message}
+                    </span>
+                  )}
                 </div>
               </form>
             </div>

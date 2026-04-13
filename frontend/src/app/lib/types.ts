@@ -59,6 +59,21 @@ export interface DocumentRecord {
     count: number;
     latest: Comment | null;
   };
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface NotificationItem {
+  id: string;
+  userId: string;
+  title: string;
+  detail: string;
+  href: string;
+  documentId?: string;
+  type: string;
+  read: boolean;
+  createdAt: string | null;
+  readAt?: string | null;
 }
 
 export interface Plant {

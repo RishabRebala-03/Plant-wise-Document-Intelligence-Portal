@@ -4,6 +4,7 @@ import type {
   Comment,
   DocumentRecord,
   ManagerDashboardData,
+  NotificationItem,
   Plant,
   User,
 } from "./types";
@@ -103,6 +104,40 @@ async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   return payload?.data as T;
 }
 
+async function apiFetchBlob(path: string, options: ApiOptions = {}): Promise<{ blob: Blob; fileName: string | null; contentType: string | null }> {
+  const headers = new Headers(options.headers ?? {});
+  const { accessToken } = getStoredTokens();
+
+  if (!options.skipAuth && accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401 && !options.skipAuth && !options.isRetry) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      return apiFetchBlob(path, { ...options, isRetry: true });
+    }
+  }
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new ApiError(payload?.error || "Request failed", response.status);
+  }
+
+  const disposition = response.headers.get("Content-Disposition");
+  const fileNameMatch = disposition?.match(/filename="?([^"]+)"?/i);
+  return {
+    blob: await response.blob(),
+    fileName: fileNameMatch?.[1] ?? null,
+    contentType: response.headers.get("Content-Type"),
+  };
+}
+
 export const categoryOptions = [
   "Safety Report",
   "Environmental Compliance",
@@ -184,11 +219,12 @@ export const documentsApi = {
     });
   },
 
-  update(documentId: string, body: Record<string, unknown>) {
+  update(documentId: string, body: Record<string, unknown> | FormData) {
+    const isFormData = body instanceof FormData;
     return apiFetch<DocumentRecord>(`/documents/${documentId}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: isFormData ? undefined : { "Content-Type": "application/json" },
+      body: isFormData ? body : JSON.stringify(body),
     });
   },
 
@@ -202,6 +238,20 @@ export const documentsApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, visibility }),
     });
+  },
+
+  downloadFile(documentId: string) {
+    return apiFetchBlob(`/documents/${documentId}/download`);
+  },
+
+  async openFileInNewTab(documentId: string) {
+    const { blob } = await apiFetchBlob(`/documents/${documentId}/download`);
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+  },
+
+  async exportCsv() {
+    return apiFetchBlob("/documents/export.csv");
   },
 
   exportUrl() {
@@ -268,6 +318,17 @@ export const settingsApi = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    });
+  },
+};
+
+export const notificationsApi = {
+  list() {
+    return apiFetch<{ items: NotificationItem[]; unreadCount: number }>("/notifications");
+  },
+  markRead(notificationId: string) {
+    return apiFetch<NotificationItem>(`/notifications/${notificationId}/read`, {
+      method: "POST",
     });
   },
 };

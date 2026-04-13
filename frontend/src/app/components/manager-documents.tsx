@@ -1,22 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router";
 import {
   Search, Filter, Eye, Download, Trash2, X, ChevronDown, Clock,
   CheckCircle2, AlertCircle, FileText,
 } from "lucide-react";
-import { categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
-import type { Activity, DocumentRecord, Plant } from "../lib/types";
+import { categoryOptions, documentsApi, plantsApi } from "../lib/api";
+import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 
 interface ManagerDocumentsProps {
   mine?: boolean;
-  activity?: boolean;
 }
 
-export function ManagerDocuments({ mine = true, activity = false }: ManagerDocumentsProps) {
+export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
+  const location = useLocation();
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([]);
   const [plants, setPlants] = useState<Plant[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<DocumentRecord | null>(null);
+  const [selectedComments, setSelectedComments] = useState<Comment[]>([]);
+  const [startInEditMode, setStartInEditMode] = useState(false);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -25,7 +27,7 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
   const [error, setError] = useState("");
 
   async function load() {
-    const [docsResult, plantsResult, dashboard] = await Promise.all([
+    const [docsResult, plantsResult] = await Promise.all([
       documentsApi.list({
         scope: mine ? "mine" : undefined,
         q: search || undefined,
@@ -34,11 +36,9 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
         plant_id: !mine ? filterPlant || undefined : undefined,
       }),
       plantsApi.list(),
-      dashboardApi.manager(),
     ]);
     setDocuments(docsResult.items);
     setPlants(plantsResult.items);
-    setActivities(dashboard.activity);
   }
 
   useEffect(() => {
@@ -47,9 +47,43 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
       .finally(() => setLoading(false));
   }, [filterCategory, filterPlant, filterStatus, mine, search]);
 
-  async function openDocument(document: DocumentRecord) {
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const docId = params.get("docId");
+    const edit = params.get("edit") === "1";
+    if (!docId) return;
+
+    documentsApi
+      .get(docId)
+      .then((result) => {
+        setSelectedDoc(result.document);
+        setSelectedComments(result.comments);
+        setStartInEditMode(edit);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Unable to open the selected document."));
+  }, [location.search]);
+
+  async function openDocumentDetails(document: DocumentRecord) {
     const result = await documentsApi.get(document.id);
     setSelectedDoc(result.document);
+    setSelectedComments(result.comments);
+    setStartInEditMode(false);
+  }
+
+  async function openOriginalDocument(document: DocumentRecord) {
+    if (document.file?.storageId) {
+      await documentsApi.openFileInNewTab(document.id);
+      return;
+    }
+    await openDocumentDetails(document);
+  }
+
+  async function updateDocument(documentId: string, payload: FormData) {
+    const updated = await documentsApi.update(documentId, payload);
+    const refreshed = await documentsApi.get(documentId);
+    setSelectedDoc(refreshed.document);
+    setSelectedComments(refreshed.comments);
+    setDocuments((prev) => prev.map((item) => (item.id === documentId ? updated : item)));
   }
 
   async function deleteDocument(documentId: string) {
@@ -58,8 +92,24 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
     await load();
   }
 
-  const pageTitle = activity ? "Recent Activity" : mine ? "My Documents" : "All Documents";
-  const pageDesc = activity ? "Your recent upload and edit history" : mine ? "Documents uploaded by you" : "All accessible documents";
+  async function exportDocuments() {
+    try {
+      const { blob, fileName } = await documentsApi.exportCsv();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName || "documents.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to export documents.");
+    }
+  }
+
+  const pageTitle = mine ? "My Documents" : "All Documents";
+  const pageDesc = mine ? "Documents uploaded by you" : "All accessible documents";
   const hasFilter = search || filterCategory || filterStatus || filterPlant;
 
   const summary = useMemo(() => {
@@ -74,39 +124,6 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading {pageTitle.toLowerCase()}...</div>;
   if (error) return <div className="p-7 text-[#BB0000]">{error}</div>;
 
-  if (activity) {
-    return (
-      <div className="p-7 max-w-[1400px]">
-        <div className="mb-7">
-          <h1 className="text-[#1a1a1a]" style={{ fontSize: 20, fontWeight: 600 }}>{pageTitle}</h1>
-          <p className="text-[#6a6d70] mt-1" style={{ fontSize: 14 }}>{pageDesc}</p>
-        </div>
-
-        <div className="bg-white border border-[#e8e8e8]">
-          <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center gap-2">
-            <Clock size={14} className="text-[#0A6ED1]" />
-            <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>Activity Log</span>
-          </div>
-          <div className="divide-y divide-[#f7f7f7]">
-            {activities.map((activityItem) => (
-              <div key={activityItem.id} className="px-5 py-4 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div style={{ fontSize: 13 }}>
-                    <span className="text-[#6a6d70]">{activityItem.action}: </span>
-                    <span className="text-[#333]">{activityItem.documentName || activityItem.entityId}</span>
-                  </div>
-                </div>
-                <div className="text-[#999] shrink-0" style={{ fontSize: 12 }}>
-                  {activityItem.createdAt || "-"}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="p-7 max-w-[1400px]">
       <div className="mb-7 flex items-start justify-between gap-4">
@@ -114,13 +131,13 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
           <h1 className="text-[#1a1a1a]" style={{ fontSize: 20, fontWeight: 600 }}>{pageTitle}</h1>
           <p className="text-[#6a6d70] mt-1" style={{ fontSize: 14 }}>{pageDesc}</p>
         </div>
-        <a
-          href={documentsApi.exportUrl()}
+        <button
+          onClick={() => void exportDocuments()}
           className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0"
           style={{ fontSize: 13 }}
         >
           <Download size={14} /> Export
-        </a>
+        </button>
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-7">
@@ -209,7 +226,7 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
           <table className="w-full">
             <thead>
               <tr className="bg-[#fafafa] border-b border-[#f0f0f0] text-left">
-                {["Document Name", "Plant", "Category", "Date", "Status", "Notes", "Actions"].map((heading) => (
+                {["Document Name", "Plant", "Category", "Date", "Status", "Actions"].map((heading) => (
                   <th key={heading} className="px-5 py-3 text-[#6a6d70]" style={{ fontSize: 12, fontWeight: 500 }}>{heading}</th>
                 ))}
               </tr>
@@ -218,7 +235,7 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
               {documents.map((document) => (
                 <tr key={document.id} className="hover:bg-[#fafafa] transition-colors">
                   <td className="px-5 py-4">
-                    <button onClick={() => void openDocument(document)} className="text-[#0A6ED1] hover:underline text-left cursor-pointer" style={{ fontSize: 13, fontWeight: 500 }}>
+                    <button onClick={() => void openDocumentDetails(document)} className="text-[#0A6ED1] hover:underline text-left cursor-pointer" style={{ fontSize: 13, fontWeight: 500 }}>
                       {document.name}
                     </button>
                     <div className="text-[#999] mt-0.5" style={{ fontSize: 11 }}>v{document.version} · by {document.uploadedBy}</div>
@@ -227,12 +244,16 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
                   <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.category}</td>
                   <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 13 }}>{document.date || "-"}</td>
                   <td className="px-5 py-4 text-[#333]" style={{ fontSize: 13 }}>{document.status}</td>
-                  <td className="px-5 py-4 text-[#6a6d70]" style={{ fontSize: 12 }}>{document.noteSummary?.count || 0}</td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
-                      <button onClick={() => void openDocument(document)} className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
-                        <Eye size={12} /> Open
+                      <button onClick={() => void openDocumentDetails(document)} className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
+                        <Eye size={12} /> View Details
                       </button>
+                      {document.file?.storageId && (
+                        <button onClick={() => void openOriginalDocument(document)} className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
+                          <Download size={12} /> Open File
+                        </button>
+                      )}
                       <button onClick={() => void deleteDocument(document.id)} className="h-8 px-3 border border-[#f0c0c0] text-[#BB0000] hover:bg-[#fff5f5] inline-flex items-center gap-1.5 cursor-pointer" style={{ fontSize: 12 }}>
                         <Trash2 size={12} /> Delete
                       </button>
@@ -245,7 +266,19 @@ export function ManagerDocuments({ mine = true, activity = false }: ManagerDocum
         </div>
       </div>
 
-      {selectedDoc && <DocumentDrawer doc={selectedDoc} onClose={() => setSelectedDoc(null)} />}
+      {selectedDoc && (
+        <DocumentDrawer
+          doc={selectedDoc}
+          comments={selectedComments}
+          autoStartEdit={startInEditMode}
+          onUpdateDocument={updateDocument}
+          onClose={() => {
+            setSelectedDoc(null);
+            setSelectedComments([]);
+            setStartInEditMode(false);
+          }}
+        />
+      )}
     </div>
   );
 }

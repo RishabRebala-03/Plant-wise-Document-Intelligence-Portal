@@ -88,6 +88,21 @@ def serialize_activity(activity: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def serialize_notification(notification: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": notification["id"],
+        "userId": notification["user_id"],
+        "title": notification.get("title", ""),
+        "detail": notification.get("detail", ""),
+        "href": notification.get("href", ""),
+        "documentId": notification.get("document_id"),
+        "type": notification.get("type", "info"),
+        "read": bool(notification.get("read")),
+        "createdAt": to_iso(notification.get("created_at")),
+        "readAt": to_iso(notification.get("read_at")),
+    }
+
+
 def serialize_plant(plant: dict[str, Any], recent_documents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "id": plant["id"],

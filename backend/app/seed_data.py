@@ -156,7 +156,7 @@ def seed_demo_data():
                     "document_approval": True,
                     "weekly_summary_report": False,
                     "system_alerts": True,
-                    "ceo_note_added": False,
+                    "ceo_note_added": user["role"] == "Mining Manager",
                 },
                 "display_preferences": {
                     "table_density": "Default",
@@ -236,6 +236,7 @@ def seed_demo_data():
     set_sequence_value("documents", 10)
     set_sequence_value("comments", 6)
     set_sequence_value("activities", 6)
+    set_sequence_value("notifications", 0)
 
 
 def create_seed_app() -> Flask:
