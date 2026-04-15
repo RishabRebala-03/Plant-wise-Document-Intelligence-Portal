@@ -10,6 +10,8 @@ export interface User {
   status: string;
   plant?: string;
   plantId?: string | null;
+  assignedPlantIds?: string[];
+  assignedPlants?: string[];
   notificationPreferences?: Record<string, boolean>;
   displayPreferences?: {
     table_density?: string;
@@ -20,6 +22,8 @@ export interface User {
     twoFactorEnabled?: boolean;
     lastPasswordChangeAt?: string | null;
   };
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface Comment {

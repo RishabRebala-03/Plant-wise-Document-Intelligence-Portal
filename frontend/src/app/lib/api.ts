@@ -14,6 +14,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 const ACCESS_TOKEN_KEY = "midwest.accessToken";
 const REFRESH_TOKEN_KEY = "midwest.refreshToken";
+export const AUTH_EXPIRED_EVENT = "midwest:auth-expired";
 
 type Tokens = {
   accessToken: string | null;
@@ -65,6 +66,7 @@ async function tryRefreshToken() {
 
   if (!response.ok) {
     clearTokens();
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     return false;
   }
 
@@ -94,6 +96,8 @@ async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
     if (refreshed) {
       return apiFetch<T>(path, { ...options, isRetry: true });
     }
+    clearTokens();
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
   }
 
   const payload = await response.json().catch(() => null);
@@ -123,6 +127,8 @@ async function apiFetchBlob(path: string, options: ApiOptions = {}): Promise<{ b
     if (refreshed) {
       return apiFetchBlob(path, { ...options, isRetry: true });
     }
+    clearTokens();
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
   }
 
   if (!response.ok) {
@@ -286,8 +292,17 @@ export const activitiesApi = {
 };
 
 export const usersApi = {
-  list() {
-    return apiFetch<User[]>("/users");
+  list(params: Record<string, string | undefined> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") {
+        search.set(key, value);
+      }
+    });
+    return apiFetch<User[]>(`/users${search.toString() ? `?${search.toString()}` : ""}`);
+  },
+  get(userId: string) {
+    return apiFetch<User>(`/users/${userId}`);
   },
   create(body: Record<string, unknown>) {
     return apiFetch<User>("/users", {
@@ -332,6 +347,23 @@ export const settingsApi = {
   updatePassword(body: Record<string, unknown>) {
     return apiFetch<User>("/settings/security/password", {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  listIpRules() {
+    return apiFetch<{ items: Array<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }> }>("/settings/ip-rules");
+  },
+  createIpRule(body: Record<string, unknown>) {
+    return apiFetch<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }>("/settings/ip-rules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  updateIpRule(ruleId: string, body: Record<string, unknown>) {
+    return apiFetch<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }>(`/settings/ip-rules/${ruleId}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });

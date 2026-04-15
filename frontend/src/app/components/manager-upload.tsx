@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
-  Upload, FileText, Clock, CheckCircle2,
+  Upload, FileText, Clock,
   CloudUpload, ArrowRight, Paperclip,
 } from "lucide-react";
 import { categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
@@ -158,11 +158,10 @@ export function ManagerUpload() {
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-5 mb-8">
+      <div className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2">
         {[
           { label: "My Documents", value: data.stats.myDocuments, icon: FileText, color: "#0A6ED1", bg: "#EBF4FD" },
           { label: "Uploaded This Week", value: data.stats.uploadedThisWeek, icon: Clock, color: "#5B738B", bg: "#EEF2F5" },
-          { label: "Approved", value: data.stats.approved, icon: CheckCircle2, color: "#107E3E", bg: "#EBF5EF" },
         ].map((stat) => (
           <div key={stat.label} className="bg-white border border-[#e8e8e8] px-5 py-5 flex items-center gap-4">
             <div className="w-10 h-10 flex items-center justify-center shrink-0" style={{ background: stat.bg }}>

@@ -67,7 +67,7 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { activitiesApi, documentsApi, notificationsApi, plantsApi, usersApi } from "./lib/api";
+import { activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -151,6 +151,14 @@ function statLabel(value: number, singular: string, plural = `${singular}s`) {
 
 function defaultHome(role: UserRole) {
   return role === "Admin" ? "/admin" : "/dashboard";
+}
+
+function assignedPlantIds(user: User) {
+  return user.assignedPlantIds?.length ? user.assignedPlantIds : user.plantId ? [user.plantId] : [];
+}
+
+function primaryPlantId(user: User) {
+  return assignedPlantIds(user)[0] || user.plantId || "";
 }
 
 function roleAllows(role: UserRole, allowed: UserRole[]) {
@@ -445,7 +453,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
-          { label: "Project Creation", path: `/plants/${user.plantId || ""}/projects/new`, icon: Plus },
+          { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus },
           { label: "Upload", path: "/upload", icon: Upload },
         ],
         common,
@@ -462,7 +470,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       ],
       common,
     ];
-  }, [user.plantId, user.role]);
+  }, [user]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.12),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(91,115,139,0.10),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] text-slate-900">
@@ -471,7 +479,9 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           <div>
             <div className="text-xs uppercase tracking-[0.24em] text-white/50">Plant-wise document intelligence</div>
             <div className="mt-1 flex items-center gap-3">
-              <div className="rounded-2xl bg-[#D1E8FF] px-3 py-1 text-xs font-semibold text-[#0A6ED1]">MW</div>
+              <div className="rounded-2xl bg-white px-3 py-2 shadow-[0_8px_24px_rgba(15,23,42,0.15)]">
+                <img src="/midwest-logo.svg" alt="Midwest logo" className="h-8 w-auto" />
+              </div>
               <div>
                 <div className="text-lg font-semibold">Midwest Operations Portal</div>
                 <div className="text-sm text-white/60">{formatRole(user.role)} workspace</div>
@@ -641,6 +651,7 @@ function CeoDashboardPage() {
   const plantSummary = useMemo(() => summarizeByPlant(documents), [documents]);
   const topPlants = [...plantSummary].sort((a, b) => b.documents - a.documents).slice(0, 5);
   const lineSeries = topPlants.map((item, index) => ({
+    plantId: item.plantId,
     name: item.plant.split(" - ")[0],
     documents: item.documents,
     projects: item.projects,
@@ -693,8 +704,26 @@ function CeoDashboardPage() {
                 <XAxis dataKey="name" stroke="#64748b" />
                 <YAxis stroke="#64748b" />
                 <Tooltip />
-                <Bar dataKey="documents" fill="#0A6ED1" radius={[10, 10, 0, 0]} />
-                <Bar dataKey="projects" fill="#5B738B" radius={[10, 10, 0, 0]} />
+                <Bar
+                  dataKey="documents"
+                  fill="#0A6ED1"
+                  radius={[10, 10, 0, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string } | undefined;
+                    if (payload?.plantId) navigate(`/plants/${payload.plantId}`);
+                  }}
+                />
+                <Bar
+                  dataKey="projects"
+                  fill="#5B738B"
+                  radius={[10, 10, 0, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string } | undefined;
+                    if (payload?.plantId) navigate(`/plants/${payload.plantId}`);
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -704,7 +733,18 @@ function CeoDashboardPage() {
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={categorySeries} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110}>
+                <Pie
+                  data={categorySeries}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={70}
+                  outerRadius={110}
+                  cursor="pointer"
+                  onClick={(entry) => {
+                    const category = (entry as { name?: string } | undefined)?.name;
+                    if (category) navigate(`/documents?category=${encodeURIComponent(category)}`);
+                  }}
+                >
                   {categorySeries.map((item, index) => (
                     <Cell key={item.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                   ))}
@@ -715,10 +755,15 @@ function CeoDashboardPage() {
           </div>
           <div className="mt-4 grid gap-2 text-sm text-slate-600">
             {categorySeries.slice(0, 5).map((item) => (
-              <div key={item.name} className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2">
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => navigate(`/documents?category=${encodeURIComponent(item.name)}`)}
+                className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2 text-left transition hover:bg-slate-100"
+              >
                 <span>{item.name}</span>
                 <span className="font-semibold text-slate-900">{item.value}</span>
-              </div>
+              </button>
             ))}
           </div>
         </SectionCard>
@@ -781,8 +826,9 @@ function CeoDashboardPage() {
 function ManagerDashboardPage() {
   const { user, documents, projects } = usePortal();
   const navigate = useNavigate();
-  const myProjects = projects.filter((project) => project.plantId === user.plantId);
-  const myDocuments = documents.filter((document) => document.plantId === user.plantId);
+  const allowedPlantIds = assignedPlantIds(user);
+  const myProjects = projects.filter((project) => allowedPlantIds.includes(project.plantId));
+  const myDocuments = documents.filter((document) => allowedPlantIds.includes(document.plantId));
   const lockedDocuments = myDocuments.filter((document) => document.accessLocked);
 
   return (
@@ -791,14 +837,14 @@ function ManagerDashboardPage() {
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-3xl">
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">Manager dashboard</div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{user.plant || "Assigned plant"} project control</h1>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{user.assignedPlants?.join(", ") || user.plant || "Assigned plants"} project control</h1>
             <p className="mt-3 text-sm leading-6 text-white/70">
               Managers can create projects and upload within their plant scope, but document edit and delete actions are now removed.
               Once a document is accessed, its manager view is marked as locked for the current session.
             </p>
           </div>
           <div className="grid min-w-[260px] gap-3 rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <button onClick={() => navigate(`/plants/${user.plantId}`)} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
+            <button onClick={() => navigate(`/plants/${primaryPlantId(user)}`)} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
               Open plant workspace
             </button>
             <button onClick={() => navigate("/upload")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
@@ -809,10 +855,10 @@ function ManagerDashboardPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="My Projects" value={myProjects.length} hint="Project spaces under your plant." icon={FolderKanban} />
-        <MetricCard label="My Documents" value={myDocuments.length} hint="Documents visible inside your plant scope." icon={FileText} tone="blue" />
-        <MetricCard label="Locked After Access" value={lockedDocuments.length} hint="Read-only items opened in this manager session." icon={Lock} tone="rose" />
-        <MetricCard label="Upload Rights" value="Enabled" hint="Managers can upload but not edit or delete documents." icon={Upload} tone="amber" />
+        <MetricCard label="My Projects" value={myProjects.length} hint="Project spaces under your plant." icon={FolderKanban} onClick={() => navigate("/plants")} />
+        <MetricCard label="My Documents" value={myDocuments.length} hint="Documents visible inside your plant scope." icon={FileText} tone="blue" onClick={() => navigate("/documents")} />
+        <MetricCard label="Locked After Access" value={lockedDocuments.length} hint="Read-only items opened in this manager session." icon={Lock} tone="rose" onClick={() => navigate("/documents")} />
+        <MetricCard label="Upload Rights" value="Enabled" hint="Managers can upload but not edit or delete documents." icon={Upload} tone="amber" onClick={() => navigate("/upload")} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
@@ -846,7 +892,7 @@ function ManagerDashboardPage() {
             </div>
             <div className="rounded-2xl bg-slate-50 p-4">
               <div className="font-semibold text-slate-900">Plant-scoped navigation</div>
-              <div className="mt-1">All plant, project, and document pathways stay inside {user.plant || "your assigned plant"}.</div>
+              <div className="mt-1">All plant, project, and document pathways stay inside {user.assignedPlants?.join(", ") || user.plant || "your assigned plants"}.</div>
             </div>
           </div>
         </SectionCard>
@@ -857,8 +903,9 @@ function ManagerDashboardPage() {
 
 function PlantIndexPage() {
   const { user, plants, documents, projects } = usePortal();
-  const visiblePlants = user.role === "Mining Manager" && user.plantId
-    ? plants.filter((plant) => plant.id === user.plantId)
+  const allowedPlantIds = assignedPlantIds(user);
+  const visiblePlants = user.role === "Mining Manager" && allowedPlantIds.length
+    ? plants.filter((plant) => allowedPlantIds.includes(plant.id))
     : plants;
 
   return (
@@ -911,13 +958,14 @@ function PlantProjectsPage() {
   const { plantId } = useParams();
   const { user, plants, projects, documents } = usePortal();
   const navigate = useNavigate();
+  const allowedPlantIds = assignedPlantIds(user);
   const plant = plants.find((item) => item.id === plantId);
   const plantProjects = projects.filter((project) => project.plantId === plantId);
   const plantDocuments = documents.filter((document) => document.plantId === plantId);
-  const canCreate = user.role === "Mining Manager" && user.plantId === plantId;
+  const canCreate = user.role === "Mining Manager" && allowedPlantIds.includes(plantId || "");
 
   if (!plant) return <NotFoundCard title="Plant not found" body="The selected plant could not be located in the current workspace." />;
-  if (user.role === "Mining Manager" && user.plantId !== plantId) return <Navigate to={defaultHome(user.role)} replace />;
+  if (user.role === "Mining Manager" && !allowedPlantIds.includes(plantId || "")) return <Navigate to={defaultHome(user.role)} replace />;
 
   return (
     <div className="space-y-6">
@@ -974,7 +1022,7 @@ function ProjectCreatePage() {
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
 
-  if (user.role !== "Mining Manager" || user.plantId !== plantId) {
+  if (user.role !== "Mining Manager" || !assignedPlantIds(user).includes(plantId || "")) {
     return <Navigate to={defaultHome(user.role)} replace />;
   }
   if (!plant) return <NotFoundCard title="Plant not found" body="A project can only be created inside a valid plant workspace." />;
@@ -1037,11 +1085,14 @@ function ProjectDocumentsPage() {
 function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectId?: string; scopedPlantId?: string }) {
   const { user, documents, projects, plants } = usePortal();
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [manager, setManager] = useState("");
-  const [identifier, setIdentifier] = useState("");
-  const [plantId, setPlantId] = useState(scopedPlantId || (user.role === "Mining Manager" ? user.plantId || "" : ""));
-  const [projectId, setProjectId] = useState(scopedProjectId || "");
+  const location = useLocation();
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const [query, setQuery] = useState(searchParams.get("q") || "");
+  const [manager, setManager] = useState(searchParams.get("manager") || "");
+  const [identifier, setIdentifier] = useState(searchParams.get("identifier") || "");
+  const [category, setCategory] = useState(searchParams.get("category") || "");
+  const [plantId, setPlantId] = useState(scopedPlantId || (user.role === "Mining Manager" ? primaryPlantId(user) : searchParams.get("plantId") || ""));
+  const [projectId, setProjectId] = useState(scopedProjectId || searchParams.get("projectId") || "");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -1050,18 +1101,33 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     if (scopedProjectId) setProjectId(scopedProjectId);
   }, [scopedPlantId, scopedProjectId]);
 
+  useEffect(() => {
+    setQuery(searchParams.get("q") || "");
+    setManager(searchParams.get("manager") || "");
+    setIdentifier(searchParams.get("identifier") || "");
+    setCategory(searchParams.get("category") || "");
+    if (!scopedPlantId && user.role !== "Mining Manager") {
+      setPlantId(searchParams.get("plantId") || "");
+    }
+    if (!scopedProjectId) {
+      setProjectId(searchParams.get("projectId") || "");
+    }
+  }, [scopedPlantId, scopedProjectId, searchParams, user.role]);
+
   const filtered = useMemo(() => documents.filter((document) => {
     const matchesPlant = !plantId || document.plantId === plantId;
     const matchesProject = !projectId || document.projectId === projectId;
+    const matchesCategory = !category || document.category === category;
     const matchesManager = !manager || document.managerName.toLowerCase().includes(manager.toLowerCase());
     const matchesIdentifier = !identifier || document.identifier.toLowerCase().includes(identifier.toLowerCase());
     const matchesQuery = !query || [document.name, document.plant, document.projectName, document.uploadedBy, document.category].join(" ").toLowerCase().includes(query.toLowerCase());
     const matchesFrom = !dateFrom || Boolean(document.date && document.date >= dateFrom);
     const matchesTo = !dateTo || Boolean(document.date && document.date <= dateTo);
-    return matchesPlant && matchesProject && matchesManager && matchesIdentifier && matchesQuery && matchesFrom && matchesTo;
-  }), [dateFrom, dateTo, documents, identifier, manager, plantId, projectId, query]);
+    return matchesPlant && matchesProject && matchesCategory && matchesManager && matchesIdentifier && matchesQuery && matchesFrom && matchesTo;
+  }), [category, dateFrom, dateTo, documents, identifier, manager, plantId, projectId, query]);
 
   const availableProjects = projects.filter((project) => !plantId || project.plantId === plantId);
+  const categories = Array.from(new Set(documents.map((document) => document.category))).sort((a, b) => a.localeCompare(b));
   const title = scopedProjectId
     ? `${projects.find((project) => project.id === scopedProjectId)?.name || "Project"} documents`
     : "Document listing";
@@ -1077,18 +1143,26 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
       <SectionCard title={title} subtitle="Separate listing page with advanced search and structured filters">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <FilterField icon={Search} label="Search">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, plant, project..." className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
           </FilterField>
           <FilterField icon={Users} label="Manager">
-            <input value={manager} onChange={(event) => setManager(event.target.value)} placeholder="Manager name" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={manager} onChange={(event) => setManager(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
           </FilterField>
           <FilterField icon={FileText} label="Identifier">
-            <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="Plant-document id" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+          </FilterField>
+          <FilterField icon={BarChart3} label="Category">
+            <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">All categories</option>
+              {categories.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </select>
           </FilterField>
           <FilterField icon={Building2} label="Plant">
             <select value={plantId} onChange={(event) => setPlantId(event.target.value)} disabled={user.role === "Mining Manager" || Boolean(scopedPlantId)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 disabled:bg-slate-100">
               <option value="">All plants</option>
-              {plants.filter((plant) => user.role !== "Mining Manager" || plant.id === user.plantId).map((plant) => (
+              {plants.filter((plant) => user.role !== "Mining Manager" || assignedPlantIds(user).includes(plant.id)).map((plant) => (
                 <option key={plant.id} value={plant.id}>{plant.name}</option>
               ))}
             </select>
@@ -1113,6 +1187,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                 setQuery("");
                 setManager("");
                 setIdentifier("");
+                setCategory("");
                 setDateFrom("");
                 setDateTo("");
                 if (!scopedPlantId && user.role !== "Mining Manager") setPlantId("");
@@ -1306,6 +1381,7 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
 
 function AnalyticsPage() {
   const { documents, plants, projects } = usePortal();
+  const navigate = useNavigate();
 
   const monthly = useMemo(() => {
     const map = documents.reduce((acc, document) => {
@@ -1327,6 +1403,7 @@ function AnalyticsPage() {
         const locked = plantDocs.filter((document) => document.accessLocked).length;
         const activeProjects = projects.filter((project) => project.plantId === plant.id).length;
         return {
+          plantId: plant.id,
           plant: plant.name.split(" - ")[0],
           documents: plantDocs.length,
           locked,
@@ -1366,6 +1443,8 @@ function AnalyticsPage() {
         const projectDocs = documents.filter((document) => document.projectId === project.id);
         const privateNotes = projectDocs.filter((document) => document.noteSummary?.latest?.visibility === "private").length;
         return {
+          plantId: project.plantId,
+          projectId: project.id,
           name: project.name.length > 18 ? `${project.name.slice(0, 18)}...` : project.name,
           documents: projectDocs.length,
           privateNotes,
@@ -1417,15 +1496,15 @@ function AnalyticsPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Upload trend" value={`${timelineHighlights.growth >= 0 ? "+" : ""}${timelineHighlights.growth}%`} hint="Month-over-month document movement." icon={LineChartIcon} />
-        <MetricCard label="Top plant" value={timelineHighlights.mostDocumentedPlant?.plant || "-"} hint={`${timelineHighlights.mostDocumentedPlant?.documents || 0} indexed documents`} icon={Building2} tone="blue" />
-        <MetricCard label="Busiest category" value={timelineHighlights.busiestCategory?.name || "-"} hint={`${timelineHighlights.busiestCategory?.value || 0} records`} icon={BarChart3} tone="amber" />
-        <MetricCard label="Locked records" value={timelineHighlights.totalLocked} hint="Manager-opened records in controlled state." icon={Lock} tone="rose" />
+        <MetricCard label="Upload trend" value={`${timelineHighlights.growth >= 0 ? "+" : ""}${timelineHighlights.growth}%`} hint="Month-over-month document movement." icon={LineChartIcon} onClick={() => navigate("/documents")} />
+        <MetricCard label="Top plant" value={timelineHighlights.mostDocumentedPlant?.plant || "-"} hint={`${timelineHighlights.mostDocumentedPlant?.documents || 0} indexed documents`} icon={Building2} tone="blue" onClick={() => navigate("/plants")} />
+        <MetricCard label="Busiest category" value={timelineHighlights.busiestCategory?.name || "-"} hint={`${timelineHighlights.busiestCategory?.value || 0} records`} icon={BarChart3} tone="amber" onClick={() => navigate("/documents")} />
+        <MetricCard label="Locked records" value={timelineHighlights.totalLocked} hint="Manager-opened records in controlled state." icon={Lock} tone="rose" onClick={() => navigate("/activity-logs")} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionCard title="Monthly uploads and controlled access" subtitle="Line chart with overlay for locked records">
-          <div className="h-96">
+          <button type="button" onClick={() => navigate("/documents")} className="block h-96 w-full rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={monthly}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
@@ -1437,14 +1516,25 @@ function AnalyticsPage() {
                 <Line type="monotone" dataKey="locked" name="Locked" stroke="#5B738B" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
-          </div>
+          </button>
         </SectionCard>
 
         <SectionCard title="Category distribution" subtitle="Pie view of document mix">
-          <div className="h-96">
+          <div className="h-96 rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={categoryMix} dataKey="value" nameKey="name" innerRadius={70} outerRadius={120}>
+                <Pie
+                  data={categoryMix}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={70}
+                  outerRadius={120}
+                  cursor="pointer"
+                  onClick={(entry) => {
+                    const category = (entry as { name?: string } | undefined)?.name;
+                    if (category) navigate(`/documents?category=${encodeURIComponent(category)}`);
+                  }}
+                >
                   {categoryMix.map((item, index) => (
                     <Cell key={item.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                   ))}
@@ -1459,7 +1549,7 @@ function AnalyticsPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <SectionCard title="Plant document density" subtitle="Bar chart comparing documents, projects, and average depth">
-          <div className="h-[26rem]">
+          <div className="h-[26rem] rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={plantBreakdown}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
@@ -1467,16 +1557,46 @@ function AnalyticsPage() {
                 <YAxis stroke="#64748b" />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="documents" name="Documents" fill="#0f766e" radius={[10, 10, 0, 0]} />
-                <Bar dataKey="projects" name="Projects" fill="#5B738B" radius={[10, 10, 0, 0]} />
-                <Bar dataKey="avgPerProject" name="Docs / Project" fill="#1d4ed8" radius={[10, 10, 0, 0]} />
+                <Bar
+                  dataKey="documents"
+                  name="Documents"
+                  fill="#0f766e"
+                  radius={[10, 10, 0, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string } | undefined;
+                    if (payload?.plantId) navigate(`/plants/${payload.plantId}`);
+                  }}
+                />
+                <Bar
+                  dataKey="projects"
+                  name="Projects"
+                  fill="#5B738B"
+                  radius={[10, 10, 0, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string } | undefined;
+                    if (payload?.plantId) navigate(`/plants/${payload.plantId}`);
+                  }}
+                />
+                <Bar
+                  dataKey="avgPerProject"
+                  name="Docs / Project"
+                  fill="#1d4ed8"
+                  radius={[10, 10, 0, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string } | undefined;
+                    if (payload?.plantId) navigate(`/plants/${payload.plantId}`);
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </SectionCard>
 
         <SectionCard title="Rolling document accumulation" subtitle="Area graph showing cumulative load by month">
-          <div className="h-[26rem]">
+          <button type="button" onClick={() => navigate("/documents")} className="block h-[26rem] w-full rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={monthly.reduce<Array<{ month: string; cumulative: number; uploads: number }>>((acc, item) => {
@@ -1502,13 +1622,13 @@ function AnalyticsPage() {
                 <Area type="monotone" dataKey="cumulative" name="Cumulative documents" stroke="#0f766e" fill="url(#uploadArea)" strokeWidth={3} />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </button>
         </SectionCard>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <SectionCard title="Plant performance radar" subtitle="Multi-axis comparison across top plants">
-          <div className="h-[26rem]">
+          <button type="button" onClick={() => navigate("/plants")} className="block h-[26rem] w-full rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={radarSeries}>
                 <PolarGrid />
@@ -1521,11 +1641,11 @@ function AnalyticsPage() {
                 <Tooltip />
               </RadarChart>
             </ResponsiveContainer>
-          </div>
+          </button>
         </SectionCard>
 
         <SectionCard title="Project intensity and note sensitivity" subtitle="Project comparison with document volume and private-note signals">
-          <div className="h-[26rem]">
+          <div className="h-[26rem] rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={projectDepth} layout="vertical" margin={{ left: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
@@ -1533,8 +1653,28 @@ function AnalyticsPage() {
                 <YAxis type="category" dataKey="name" stroke="#64748b" width={130} />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="documents" name="Documents" fill="#0A6ED1" radius={[0, 10, 10, 0]} />
-                <Bar dataKey="privateNotes" name="Private note signals" fill="#5B738B" radius={[0, 10, 10, 0]} />
+                <Bar
+                  dataKey="documents"
+                  name="Documents"
+                  fill="#0A6ED1"
+                  radius={[0, 10, 10, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string; projectId?: string } | undefined;
+                    if (payload?.plantId && payload?.projectId) navigate(`/plants/${payload.plantId}/projects/${payload.projectId}/documents`);
+                  }}
+                />
+                <Bar
+                  dataKey="privateNotes"
+                  name="Private note signals"
+                  fill="#5B738B"
+                  radius={[0, 10, 10, 0]}
+                  cursor="pointer"
+                  onClick={(state) => {
+                    const payload = state?.payload as { plantId?: string; projectId?: string } | undefined;
+                    if (payload?.plantId && payload?.projectId) navigate(`/plants/${payload.plantId}/projects/${payload.projectId}/documents`);
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1545,7 +1685,7 @@ function AnalyticsPage() {
         <SectionCard title="Top uploaders" subtitle="People driving document movement">
           <div className="space-y-3">
             {uploaderRanking.map((item, index) => (
-              <div key={item.name} className="flex items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4">
+              <button key={item.name} type="button" onClick={() => navigate("/oversight")} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-300">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-950 text-sm font-semibold text-white">
                   {index + 1}
                 </div>
@@ -1556,40 +1696,40 @@ function AnalyticsPage() {
                 <div className="h-2 w-28 overflow-hidden rounded-full bg-slate-100">
                   <div className="h-full rounded-full bg-teal-600" style={{ width: `${(item.uploads / Math.max(1, uploaderRanking[0]?.uploads || 1)) * 100}%` }} />
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </SectionCard>
 
         <SectionCard title="Executive observations" subtitle="Quick reads from the expanded analytics workspace">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-3xl bg-slate-50 p-4">
+            <button type="button" onClick={() => navigate("/plants")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
               <div className="text-sm font-semibold text-slate-900">Plant concentration</div>
               <div className="mt-2 text-sm text-slate-600">
                 {timelineHighlights.mostDocumentedPlant?.plant || "No plant"} currently leads the network with{" "}
                 {timelineHighlights.mostDocumentedPlant?.documents || 0} documents and{" "}
                 {timelineHighlights.mostDocumentedPlant?.projects || 0} active project spaces.
               </div>
-            </div>
-            <div className="rounded-3xl bg-slate-50 p-4">
+            </button>
+            <button type="button" onClick={() => navigate("/documents")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
               <div className="text-sm font-semibold text-slate-900">Category pressure</div>
               <div className="mt-2 text-sm text-slate-600">
                 {timelineHighlights.busiestCategory?.name || "No dominant category"} is the heaviest stream,
                 suggesting where governance and approvals will cluster.
               </div>
-            </div>
-            <div className="rounded-3xl bg-slate-50 p-4">
+            </button>
+            <button type="button" onClick={() => navigate("/activity-logs")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
               <div className="text-sm font-semibold text-slate-900">Access governance</div>
               <div className="mt-2 text-sm text-slate-600">
                 {timelineHighlights.totalLocked} records are currently in manager-locked view, which is useful for tracing controlled review behavior.
               </div>
-            </div>
-            <div className="rounded-3xl bg-slate-50 p-4">
+            </button>
+            <button type="button" onClick={() => navigate("/plants")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
               <div className="text-sm font-semibold text-slate-900">Project balance</div>
               <div className="mt-2 text-sm text-slate-600">
                 Use the plant density and project intensity charts together to spot whether documentation is evenly distributed or concentrated in a few workstreams.
               </div>
-            </div>
+            </button>
           </div>
         </SectionCard>
       </div>
@@ -1600,33 +1740,207 @@ function AnalyticsPage() {
 function AdminDashboardPage() {
   const { users, documents, plants, portalState } = usePortal();
   const navigate = useNavigate();
+  const disabledUsers = users.filter((candidate) => candidate.status !== "Active").length;
+  const managerUsers = users.filter((candidate) => candidate.role === "Mining Manager");
+  const multiPlantManagers = managerUsers.filter((candidate) => (candidate.assignedPlantIds?.length || 0) > 1).length;
+  const executiveUsers = users.filter((candidate) => candidate.role !== "Mining Manager").length;
+  const lockedDocuments = documents.filter((document) => document.accessLocked).length;
+  const reviewRules = portalState.ipRules.filter((rule) => rule.status === "Review").length;
+  const blockedRules = portalState.ipRules.filter((rule) => rule.status === "Blocked").length;
+  const activeRules = portalState.ipRules.filter((rule) => rule.status === "Allowed").length;
+  const roleMix = [
+    { name: "Mining Managers", value: managerUsers.length, fill: "#B45309", route: "/admin/users" },
+    { name: "Admins", value: users.filter((candidate) => candidate.role === "Admin").length, fill: "#0F766E", route: "/admin/access" },
+    { name: "CEO", value: users.filter((candidate) => candidate.role === "CEO").length, fill: "#334155", route: "/admin/users" },
+  ].filter((item) => item.value > 0);
+  const ruleMix = [
+    { name: "Allowed", value: activeRules, fill: "#0F766E" },
+    { name: "Blocked", value: blockedRules, fill: "#B91C1C" },
+    { name: "Review", value: reviewRules, fill: "#B45309" },
+  ];
+  const governanceSeries = [
+    { name: "Multi-plant", value: multiPlantManagers, fill: "#B45309", route: "/admin/access" },
+    { name: "Disabled", value: disabledUsers, fill: "#7C2D12", route: "/admin/users" },
+    { name: "Locked docs", value: lockedDocuments, fill: "#334155", route: "/admin/activity-logs" },
+    { name: "Rules review", value: reviewRules, fill: "#0F766E", route: "/admin/network" },
+  ];
+  const adminFocusAreas = [
+    {
+      title: "Identity operations",
+      value: `${managerUsers.length}/${users.length}`,
+      detail: `${disabledUsers} accounts need attention or reactivation.`,
+      to: "/admin/users",
+    },
+    {
+      title: "Plant access spread",
+      value: `${multiPlantManagers}`,
+      detail: "Managers currently span more than one plant scope.",
+      to: "/admin/access",
+    },
+    {
+      title: "Network posture",
+      value: `${activeRules}/${portalState.ipRules.length || 0}`,
+      detail: `${reviewRules} entries still require decision.`,
+      to: "/admin/network",
+    },
+    {
+      title: "Session enforcement",
+      value: portalState.sessionPolicy.enforceSingleSession ? "Strict" : "Advisory",
+      detail: `${portalState.sessionPolicy.autoLogoutMinutes} minute timeout with ${portalState.sessionPolicy.conflictMode} conflict handling.`,
+      to: "/admin/sessions",
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#111827,_#3f3f46)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(17,24,39,0.24)]">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-3xl">
-            <div className="text-xs uppercase tracking-[0.26em] text-white/55">Admin dashboard</div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">User governance, access control, and network policy</h1>
+            <div className="text-xs uppercase tracking-[0.26em] text-white/55">Admin command center</div>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Governance analytics for identity, network policy, and platform controls</h1>
             <p className="mt-3 text-sm leading-6 text-white/72">
-              Administration now has its own dashboard and separate pages for user management, role access, IP configuration, and session rules.
+              This view is purpose-built for administration: less executive storytelling, more control coverage, risk posture, and direct drill-downs into enforceable settings.
             </p>
           </div>
-          <div className="grid min-w-[260px] gap-3 rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <button onClick={() => navigate("/admin/users")} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
+          <div className="grid min-w-[280px] gap-3 rounded-[28px] border border-white/10 bg-black/10 p-4 backdrop-blur">
+            <button onClick={() => navigate("/admin/users")} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-amber-50">
               Manage users
             </button>
             <button onClick={() => navigate("/admin/network")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
               Review IP rules
+            </button>
+            <button onClick={() => navigate("/admin/activity-logs")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
+              Open audit logs
             </button>
           </div>
         </div>
       </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Users" value={users.length} hint="Registered user accounts in the system." icon={Users} />
-        <MetricCard label="Plants" value={plants.length} hint="Plants covered by governance and audit policies." icon={Building2} tone="blue" />
-        <MetricCard label="Documents" value={documents.length} hint="Records available to govern and audit." icon={FileText} tone="amber" />
-        <MetricCard label="IP Rules" value={portalState.ipRules.length} hint="Allow, block, and review network entries." icon={Network} tone="rose" />
+        <MetricCard label="Users" value={users.length} hint="Registered user accounts in the system." icon={Users} onClick={() => navigate("/admin/users")} />
+        <MetricCard label="Plants" value={plants.length} hint="Plants covered by governance and audit policies." icon={Building2} tone="blue" onClick={() => navigate("/admin/access")} />
+        <MetricCard label="Documents" value={documents.length} hint="Records available to govern and audit." icon={FileText} tone="amber" onClick={() => navigate("/admin/activity-logs")} />
+        <MetricCard label="IP Rules" value={portalState.ipRules.length} hint="Allow, block, and review network entries." icon={Network} tone="rose" onClick={() => navigate("/admin/network")} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <SectionCard title="Governance pressure points" subtitle="Clickable control metrics for the admin persona">
+          <div className="grid gap-4 md:grid-cols-2">
+            {governanceSeries.map((item) => (
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => navigate(item.route)}
+                className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,_#fffdf7,_#f5efe4)] p-5 text-left transition hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-[0_18px_45px_rgba(120,53,15,0.12)]"
+              >
+                <div className="text-sm uppercase tracking-[0.2em] text-slate-500">{item.name}</div>
+                <div className="mt-3 text-4xl font-semibold text-slate-950">{item.value}</div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                  <div className="h-full rounded-full" style={{ width: `${Math.min(100, (item.value / Math.max(1, users.length || documents.length || portalState.ipRules.length || 1)) * 100)}%`, backgroundColor: item.fill }} />
+                </div>
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Control summary" subtitle="Direct links into admin areas">
+          <div className="space-y-3">
+            {adminFocusAreas.map((area) => (
+              <button
+                key={area.title}
+                type="button"
+                onClick={() => navigate(area.to)}
+                className="w-full rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-semibold text-slate-900">{area.title}</div>
+                  <div className="text-lg font-semibold text-slate-900">{area.value}</div>
+                </div>
+                <div className="mt-1 text-sm text-slate-600">{area.detail}</div>
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <SectionCard title="Role mix" subtitle="Pie chart of who holds operational authority">
+          <button
+            type="button"
+            onClick={() => navigate("/admin/users")}
+            className="w-full rounded-[28px] bg-[radial-gradient(circle_at_top,_#fff7ed,_#fff_58%)] p-3 text-left transition hover:bg-[radial-gradient(circle_at_top,_#ffedd5,_#fff_58%)]"
+          >
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={roleMix} dataKey="value" nameKey="name" innerRadius={68} outerRadius={115} paddingAngle={3}>
+                    {roleMix.map((item) => (
+                      <Cell key={item.name} fill={item.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="grid gap-2 text-sm text-slate-600 md:grid-cols-3">
+              {roleMix.map((item) => (
+                <div key={item.name} className="rounded-2xl bg-white px-3 py-2">
+                  <div className="font-semibold text-slate-900">{item.name}</div>
+                  <div>{item.value} account{item.value === 1 ? "" : "s"}</div>
+                </div>
+              ))}
+            </div>
+          </button>
+        </SectionCard>
+
+        <SectionCard title="Policy status" subtitle="Bar view of admin hotspots and network rule posture">
+          <div className="grid gap-4">
+            <button
+              type="button"
+              onClick={() => navigate("/admin/network")}
+              className="w-full rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,_#f8fafc,_#ffffff)] p-3 text-left transition hover:-translate-y-0.5 hover:border-slate-300"
+            >
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ruleMix}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="name" stroke="#64748b" />
+                    <YAxis stroke="#64748b" />
+                    <Tooltip />
+                    <Bar dataKey="value" radius={[12, 12, 0, 0]}>
+                      {ruleMix.map((item) => (
+                        <Cell key={item.name} fill={item.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigate("/admin/activity-logs")}
+              className="w-full rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,_#fff,_#f8fafc)] p-3 text-left transition hover:-translate-y-0.5 hover:border-slate-300"
+            >
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={governanceSeries} layout="vertical" margin={{ left: 8, right: 18 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" stroke="#64748b" />
+                    <YAxis type="category" dataKey="name" stroke="#64748b" width={95} />
+                    <Tooltip />
+                    <Bar dataKey="value" radius={[0, 12, 12, 0]}>
+                      {governanceSeries.map((item) => (
+                        <Cell key={item.name} fill={item.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </button>
+          </div>
+        </SectionCard>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
@@ -1656,11 +1970,14 @@ function AdminTile({ title, body, to, icon: Icon }: { title: string; body: strin
 function ManagerOversightPage() {
   const { user, users, plants, refreshData } = usePortal();
   const [search, setSearch] = useState("");
+  const [plantFilter, setPlantFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [editor, setEditor] = useState<User | null>(null);
-  const [draft, setDraft] = useState({ name: "", email: "", plantId: "", status: "Active" });
+  const navigate = useNavigate();
+  const [draft, setDraft] = useState({ name: "", email: "", assignedPlantIds: [] as string[], status: "Active" });
 
   const managers = useMemo(
     () => users.filter((candidate) => candidate.role === "Mining Manager"),
@@ -1669,13 +1986,13 @@ function ManagerOversightPage() {
 
   const filtered = useMemo(
     () =>
-      managers.filter((candidate) =>
-        [candidate.name, candidate.email, candidate.plant || "", candidate.status]
-          .join(" ")
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      ),
-    [managers, search],
+      managers.filter((candidate) => {
+        const matchesSearch = !search || candidate.name.toLowerCase().includes(search.toLowerCase());
+        const matchesPlant = !plantFilter || candidate.assignedPlantIds?.includes(plantFilter);
+        const matchesStatus = !statusFilter || candidate.status === statusFilter;
+        return matchesSearch && matchesPlant && matchesStatus;
+      }),
+    [managers, plantFilter, search, statusFilter],
   );
 
   function openEditor(target: User) {
@@ -1683,7 +2000,7 @@ function ManagerOversightPage() {
     setDraft({
       name: target.name,
       email: target.email,
-      plantId: target.plantId || "",
+      assignedPlantIds: target.assignedPlantIds || (target.plantId ? [target.plantId] : []),
       status: target.status,
     });
     setError("");
@@ -1699,7 +2016,7 @@ function ManagerOversightPage() {
       await usersApi.update(editor.id, {
         name: draft.name,
         email: draft.email,
-        plantId: draft.plantId,
+        assignedPlantIds: draft.assignedPlantIds,
         status: draft.status,
       });
       setEditor(null);
@@ -1763,9 +2080,18 @@ function ManagerOversightPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by manager, email, or plant..."
+            placeholder=""
             className="h-12 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
           />
+          <select value={plantFilter} onChange={(event) => setPlantFilter(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+            <option value="">All plants</option>
+            {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name}</option>)}
+          </select>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+            <option value="">All statuses</option>
+            <option value="Active">Active</option>
+            <option value="Disabled">Disabled</option>
+          </select>
           {message ? <div className="text-sm text-emerald-700">{message}</div> : null}
           {error ? <div className="text-sm text-[#BB0000]">{error}</div> : null}
         </div>
@@ -1785,11 +2111,16 @@ function ManagerOversightPage() {
               {filtered.map((candidate) => (
                 <tr key={candidate.id}>
                   <td className="px-4 py-4">
-                    <div className="font-semibold text-slate-900">{candidate.name}</div>
+                    <button
+                      onClick={() => navigate(user.role === "Admin" ? `/admin/users/${candidate.id}` : `/oversight/${candidate.id}`)}
+                      className="font-semibold text-slate-900 transition hover:text-[#0A6ED1]"
+                    >
+                      {candidate.name}
+                    </button>
                     <div className="mt-1 text-xs text-slate-500">{candidate.id}</div>
                   </td>
                   <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
-                  <td className="px-4 py-4 text-slate-600">{candidate.plant || "All plants"}</td>
+                  <td className="px-4 py-4 text-slate-600">{candidate.assignedPlants?.join(", ") || candidate.plant || "All plants"}</td>
                   <td className="px-4 py-4">
                     <span className={`rounded-full px-3 py-1 text-xs font-medium ${candidate.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
                       {candidate.status}
@@ -1842,13 +2173,24 @@ function ManagerOversightPage() {
               <input value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
             </label>
             <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">Plant assignment</span>
-              <select value={draft.plantId} onChange={(event) => setDraft((current) => ({ ...current, plantId: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-                <option value="">Select plant</option>
+              <span className="font-medium text-slate-700">Assigned plants</span>
+              <div className="grid max-h-48 gap-2 overflow-auto rounded-2xl border border-slate-200 bg-white p-3">
                 {plants.map((plant) => (
-                  <option key={plant.id} value={plant.id}>{plant.name}</option>
+                  <label key={plant.id} className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-3 py-2">
+                    <span>{plant.name}</span>
+                    <input
+                      type="checkbox"
+                      checked={draft.assignedPlantIds.includes(plant.id)}
+                      onChange={(event) => setDraft((current) => ({
+                        ...current,
+                        assignedPlantIds: event.target.checked
+                          ? [...current.assignedPlantIds, plant.id]
+                          : current.assignedPlantIds.filter((id) => id !== plant.id),
+                      }))}
+                    />
+                  </label>
                 ))}
-              </select>
+              </div>
             </label>
             <label className="space-y-2 text-sm">
               <span className="font-medium text-slate-700">Status</span>
@@ -1872,12 +2214,99 @@ function ManagerOversightPage() {
   );
 }
 
+function ManagerDetailPage() {
+  const { userId } = useParams();
+  const { user, users, plants, documents } = usePortal();
+  const target = users.find((candidate) => candidate.id === userId && candidate.role === "Mining Manager");
+
+  if (!target) {
+    return <NotFoundCard title="Manager not found" body="The selected manager could not be located." />;
+  }
+
+  const assignedIds = target.assignedPlantIds || (target.plantId ? [target.plantId] : []);
+  const assignedPlantsList = plants.filter((plant) => assignedIds.includes(plant.id));
+  const ownedDocuments = documents.filter((document) => document.uploadedById === target.id);
+  const scopedDocuments = documents.filter((document) => assignedIds.includes(document.plantId));
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={user.role === "Admin" ? [{ label: "Admin", to: "/admin" }, { label: "Users", to: "/admin/users" }, { label: target.name }] : [{ label: "Manager Access", to: "/oversight" }, { label: target.name }]} />
+      <SectionCard title={target.name} subtitle="Manager profile, assigned plants, and scoped activity">
+        <div className="grid gap-4 md:grid-cols-3">
+          <MetricCard label="Assigned Plants" value={assignedPlantsList.length} hint="Plants this manager can access." icon={Building2} tone="blue" />
+          <MetricCard label="Uploaded Documents" value={ownedDocuments.length} hint="Documents uploaded by this manager." icon={FileText} tone="amber" />
+          <MetricCard label="Status" value={target.status} hint="Current login and access state." icon={ShieldCheck} tone={target.status === "Active" ? "teal" : "rose"} />
+        </div>
+        <div className="mt-6 grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
+            <div className="text-lg font-semibold text-slate-900">Manager details</div>
+            <div className="mt-4 space-y-3 text-sm text-slate-600">
+              <div><span className="font-semibold text-slate-900">Email:</span> {target.email}</div>
+              <div><span className="font-semibold text-slate-900">Role:</span> {target.role}</div>
+              <div><span className="font-semibold text-slate-900">Primary plant:</span> {target.plant || "All plants"}</div>
+              <div><span className="font-semibold text-slate-900">Updated:</span> {formatDate(target.updatedAt || null)}</div>
+            </div>
+          </div>
+          <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+            <div className="text-lg font-semibold text-slate-900">Assigned plants</div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {assignedPlantsList.map((plant) => (
+                <div key={plant.id} className="rounded-3xl bg-slate-50 p-4">
+                  <div className="font-semibold text-slate-900">{plant.name}</div>
+                  <div className="mt-1 text-sm text-slate-500">{plant.status}</div>
+                </div>
+              ))}
+              {!assignedPlantsList.length ? <div className="rounded-3xl bg-slate-50 p-4 text-sm text-slate-500">No plants assigned.</div> : null}
+            </div>
+          </div>
+        </div>
+        <div className="mt-6 rounded-[28px] border border-slate-200 bg-white p-5">
+          <div className="text-lg font-semibold text-slate-900">Documents inside assigned scope</div>
+          <div className="mt-4 overflow-hidden rounded-[22px] border border-slate-200">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-sm text-slate-500">
+                  <th className="px-4 py-3 font-medium">Document</th>
+                  <th className="px-4 py-3 font-medium">Plant</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                {scopedDocuments.slice(0, 8).map((document) => (
+                  <tr key={document.id}>
+                    <td className="px-4 py-4 font-medium text-slate-900">{document.name}</td>
+                    <td className="px-4 py-4 text-slate-600">{document.plant}</td>
+                    <td className="px-4 py-4 text-slate-600">{document.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
 function AdminAccessPage() {
-  const { portalState, setAccessRules } = usePortal();
+  const { portalState, setAccessRules, users, plants, refreshData } = usePortal();
+  const [savingManagerId, setSavingManagerId] = useState<string | null>(null);
 
   function updateRule(index: number, field: keyof AccessRule, value: string | boolean) {
     const next = portalState.accessRules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, [field]: value } : rule);
     setAccessRules(next);
+  }
+
+  async function togglePlantAssignment(manager: User, plantId: string, checked: boolean) {
+    setSavingManagerId(manager.id);
+    try {
+      const current = manager.assignedPlantIds || (manager.plantId ? [manager.plantId] : []);
+      const next = checked ? [...current, plantId] : current.filter((item) => item !== plantId);
+      await usersApi.update(manager.id, { assignedPlantIds: next });
+      await refreshData();
+    } finally {
+      setSavingManagerId(null);
+    }
   }
 
   return (
@@ -1892,7 +2321,10 @@ function AdminAccessPage() {
                   <div className="text-lg font-semibold text-slate-900">{formatRole(rule.role)}</div>
                   <div className="mt-1 text-sm text-slate-500">{rule.plantsScope}</div>
                 </div>
-                <input value={rule.plantsScope} onChange={(event) => updateRule(index, "plantsScope", event.target.value)} className="h-11 w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                <select value={rule.plantsScope} onChange={(event) => updateRule(index, "plantsScope", event.target.value)} className="h-11 w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                  <option value="All plants">All plants</option>
+                  {plants.map((plant) => <option key={`${rule.role}-${plant.id}`} value={plant.name}>{plant.name}</option>)}
+                </select>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
                 <AccessToggle label="Create projects" checked={rule.canCreateProjects} onChange={(checked) => updateRule(index, "canCreateProjects", checked)} />
@@ -1904,6 +2336,38 @@ function AdminAccessPage() {
               </div>
             </div>
           ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Assign plants to managers" subtitle="Managers can only see documents and plants within their assigned scope">
+        <div className="grid gap-4">
+          {users.filter((candidate) => candidate.role === "Mining Manager").map((manager) => {
+            const selected = manager.assignedPlantIds || (manager.plantId ? [manager.plantId] : []);
+            return (
+              <div key={manager.id} className="rounded-[28px] border border-slate-200 bg-white p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">{manager.name}</div>
+                    <div className="mt-1 text-sm text-slate-500">{manager.email}</div>
+                  </div>
+                  <div className="text-sm text-slate-500">{selected.length} plant{selected.length === 1 ? "" : "s"} assigned</div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {plants.map((plant) => (
+                    <label key={`${manager.id}-${plant.id}`} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                      <span>{plant.name}</span>
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(plant.id)}
+                        disabled={savingManagerId === manager.id}
+                        onChange={(event) => void togglePlantAssignment(manager, plant.id, event.target.checked)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </SectionCard>
     </div>
@@ -1920,18 +2384,51 @@ function AccessToggle({ label, checked, onChange }: { label: string; checked: bo
 }
 
 function AdminNetworkPage() {
-  const { portalState, setIpRules } = usePortal();
+  const [rules, setRules] = useState<IpRule[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [draft, setDraft] = useState({ label: "", address: "", status: "Allowed" as IpRule["status"] });
+  const [message, setMessage] = useState("");
 
-  function updateRule(id: string, status: IpRule["status"]) {
-    setIpRules(portalState.ipRules.map((rule) => rule.id === id ? { ...rule, status, lastUpdated: new Date().toISOString().slice(0, 10) } : rule));
+  useEffect(() => {
+    settingsApi.listIpRules().then((result) => setRules(result.items)).catch((err) => setMessage(err instanceof Error ? err.message : "Unable to load IP rules."));
+  }, []);
+
+  async function updateRule(id: string, status: IpRule["status"]) {
+    const updated = await settingsApi.updateIpRule(id, { status });
+    setRules((current) => current.map((rule) => rule.id === id ? updated : rule));
+  }
+
+  async function createRule() {
+    const created = await settingsApi.createIpRule(draft);
+    setRules((current) => [...current, created].sort((a, b) => a.label.localeCompare(b.label)));
+    setDraft({ label: "", address: "", status: "Allowed" });
+    setShowCreate(false);
+    setMessage("IP rule created successfully.");
   }
 
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "IP Configuration" }]} />
-      <SectionCard title="IP configuration" subtitle="Allow, block, and review network sources">
+      <SectionCard
+        title="IP configuration"
+        subtitle="Allow, block, and review network sources"
+        action={<button onClick={() => setShowCreate((current) => !current)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Create IP</button>}
+      >
+        {message ? <div className="mb-4 text-sm text-emerald-700">{message}</div> : null}
+        {showCreate ? (
+          <div className="mb-5 grid gap-3 rounded-[28px] border border-slate-200 bg-slate-50 p-5 md:grid-cols-4">
+            <input value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder="Label" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={draft.address} onChange={(event) => setDraft((current) => ({ ...current, address: event.target.value }))} placeholder="IP address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as IpRule["status"] }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="Allowed">Allowed</option>
+              <option value="Blocked">Blocked</option>
+              <option value="Review">Review</option>
+            </select>
+            <button onClick={() => void createRule()} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">Save IP</button>
+          </div>
+        ) : null}
         <div className="grid gap-4">
-          {portalState.ipRules.map((rule) => (
+          {rules.map((rule) => (
             <div key={rule.id} className="flex flex-wrap items-center justify-between gap-4 rounded-[28px] border border-slate-200 bg-white p-5">
               <div>
                 <div className="text-base font-semibold text-slate-900">{rule.label}</div>
@@ -2054,10 +2551,12 @@ function AppContent() {
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentDetailPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO"]}><ManagerOversightPage /></RoleGate> },
+          { path: "oversight/:userId", element: <RoleGate allowed={["CEO"]}><ManagerDetailPage /></RoleGate> },
           { path: "activity-logs", element: <RoleGate allowed={["CEO"]}><ActivityLogsPage /></RoleGate> },
           { path: "upload", element: <RoleGate allowed={["Mining Manager"]}><ManagerUpload /></RoleGate> },
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
           { path: "admin/users", element: <RoleGate allowed={["Admin"]}><ManagerOversightPage /></RoleGate> },
+          { path: "admin/users/:userId", element: <RoleGate allowed={["Admin"]}><ManagerDetailPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
           { path: "admin/network", element: <RoleGate allowed={["Admin"]}><AdminNetworkPage /></RoleGate> },
           { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },

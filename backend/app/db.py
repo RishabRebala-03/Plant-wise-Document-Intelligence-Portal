@@ -31,6 +31,8 @@ def ensure_indexes():
     db = current_app.extensions["mongo_db"]
     db.users.create_index([("id", ASCENDING)], unique=True)
     db.users.create_index([("email", ASCENDING)], unique=True)
+    db.users.create_index([("assigned_plant_ids", ASCENDING)])
+    db.users.create_index([("active_session_id", ASCENDING)])
     db.plants.create_index([("id", ASCENDING)], unique=True)
     db.documents.create_index([("id", ASCENDING)], unique=True)
     db.documents.create_index([("plant_id", ASCENDING), ("created_at", DESCENDING)])
@@ -43,7 +45,10 @@ def ensure_indexes():
     db.notifications.create_index([("user_id", ASCENDING), ("read", ASCENDING), ("created_at", DESCENDING)])
     db.notifications.create_index([("user_id", ASCENDING), ("source_comment_id", ASCENDING)], unique=True, sparse=True)
     db.refresh_tokens.create_index([("jti", ASCENDING)], unique=True)
+    db.refresh_tokens.create_index([("user_id", ASCENDING), ("revoked", ASCENDING)])
     db.refresh_tokens.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
+    db.ip_rules.create_index([("id", ASCENDING)], unique=True)
+    db.ip_rules.create_index([("address", ASCENDING)])
     db.counters.create_index([("_id", ASCENDING)])
     current_app.extensions["mongo_indexes_ready"] = True
 

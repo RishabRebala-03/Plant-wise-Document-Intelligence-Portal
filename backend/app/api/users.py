@@ -31,6 +31,42 @@ def _can_manage_user(actor: dict, target: dict, *, allow_delete: bool = False) -
     return False, "You do not have permission to manage this user"
 
 
+def _assigned_plants(db, plant_ids: list[str] | None) -> tuple[list[str], list[str], str | None, str]:
+    ids = [plant_id for plant_id in (plant_ids or []) if plant_id]
+    if not ids:
+        return [], [], None, "All"
+    plants = list(db.plants.find({"id": {"$in": ids}}).sort("name", 1))
+    if len(plants) != len(set(ids)):
+        return [], [], None, ""
+    ordered = sorted(plants, key=lambda plant: ids.index(plant["id"]))
+    ordered_ids = [plant["id"] for plant in ordered]
+    ordered_names = [plant["name"] for plant in ordered]
+    return ordered_ids, ordered_names, ordered_ids[0], ordered_names[0]
+
+
+def _record_user_activity(action: str, actor: dict, target: dict, **metadata):
+    db = get_db()
+    db.activities.insert_one(
+        {
+            "id": next_public_id("activities", "EVT"),
+            "action": action,
+            "entity_type": "user",
+            "entity_id": target["id"],
+            "user_id": actor["id"],
+            "user_name": actor["name"],
+            "metadata": {
+                "targetUserId": target["id"],
+                "targetUserName": target["name"],
+                "targetRole": target.get("role"),
+                "targetStatus": target.get("status"),
+                "assignedPlants": target.get("assigned_plant_names", []),
+                **metadata,
+            },
+            "created_at": utc_now(),
+        }
+    )
+
+
 @users_bp.get("/users")
 @require_auth(["Admin", "CEO"])
 def list_users():
@@ -38,15 +74,32 @@ def list_users():
     query = {}
     role = request.args.get("role", "").strip()
     status = request.args.get("status", "").strip()
+    plant_id = request.args.get("plantId", "").strip()
     q = request.args.get("q", "").strip()
     if role:
         query["role"] = role
     if status:
         query["status"] = status
+    if plant_id:
+        query["assigned_plant_ids"] = plant_id
     if q:
         query["$or"] = [{"name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
     users = [serialize_user(user) for user in db.users.find(query).sort("name", 1)]
     return success_response(users)
+
+
+@users_bp.get("/users/<user_id>")
+@require_auth(["Admin", "CEO"])
+def get_user(user_id: str):
+    db = get_db()
+    user = db.users.find_one({"id": user_id})
+    if not user:
+        return error_response("User not found", 404)
+    actor = _current_user()
+    allowed, message = _can_manage_user(actor, user)
+    if not allowed:
+        return error_response(message or "Forbidden", 403)
+    return success_response(serialize_user(user))
 
 
 @users_bp.post("/users")
@@ -57,7 +110,9 @@ def create_user():
     name = (body.get("name") or "").strip()
     email = (body.get("email") or "").strip().lower()
     role = (body.get("role") or "Mining Manager").strip()
-    plant_id = body.get("plantId")
+    assigned_plant_ids = body.get("assignedPlantIds")
+    if assigned_plant_ids is None and body.get("plantId") is not None:
+        assigned_plant_ids = [body.get("plantId")] if body.get("plantId") else []
 
     if not name or not email:
         return error_response("Name and email are required", 400)
@@ -65,7 +120,9 @@ def create_user():
         return error_response("A user with this email already exists", 409)
 
     first_name, _, last_name = name.partition(" ")
-    plant = db.plants.find_one({"id": plant_id}) if plant_id else None
+    plant_ids, plant_names, primary_plant_id, primary_plant_name = _assigned_plants(db, assigned_plant_ids if isinstance(assigned_plant_ids, list) else [])
+    if assigned_plant_ids and not plant_names:
+        return error_response("One or more assigned plants were not found", 404)
     now = utc_now()
     password = body.get("password") or "Password123!"
     user = {
@@ -76,16 +133,21 @@ def create_user():
         "email": email,
         "role": role,
         "status": "Active",
-        "plant_id": plant["id"] if plant else None,
-        "plant_name": plant["name"] if plant else "All",
+        "plant_id": primary_plant_id,
+        "plant_name": primary_plant_name,
+        "assigned_plant_ids": plant_ids,
+        "assigned_plant_names": plant_names,
         "password_hash": hash_password(password),
         "notification_preferences": body.get("notificationPreferences", {}),
         "display_preferences": body.get("displayPreferences", {}),
         "security": {"two_factor_enabled": False, "last_password_change_at": now},
+        "active_session_id": None,
+        "session_started_at": None,
         "created_at": now,
         "updated_at": now,
     }
     db.users.insert_one(user)
+    _record_user_activity("User Created", _current_user(), user, createdBy=_current_user()["id"])
     return success_response(serialize_user(user), 201)
 
 
@@ -109,17 +171,19 @@ def update_user(user_id: str):
             updates[field] = body[field].strip() if isinstance(body[field], str) else body[field]
     if "email" in updates:
         updates["email"] = updates["email"].lower()
-    if body.get("plantId") is not None:
-        plant_id = body["plantId"]
-        if plant_id:
-            plant = db.plants.find_one({"id": plant_id})
-            if not plant:
-                return error_response("Plant not found", 404)
-            updates["plant_id"] = plant["id"]
-            updates["plant_name"] = plant["name"]
-        else:
-            updates["plant_id"] = None
-            updates["plant_name"] = "All"
+    assigned_plant_ids = body.get("assignedPlantIds")
+    if assigned_plant_ids is None and body.get("plantId") is not None:
+        assigned_plant_ids = [body["plantId"]] if body["plantId"] else []
+    if assigned_plant_ids is not None:
+        if not isinstance(assigned_plant_ids, list):
+            return error_response("Assigned plants must be a list", 400)
+        plant_ids, plant_names, primary_plant_id, primary_plant_name = _assigned_plants(db, assigned_plant_ids)
+        if assigned_plant_ids and not plant_names:
+            return error_response("One or more assigned plants were not found", 404)
+        updates["assigned_plant_ids"] = plant_ids
+        updates["assigned_plant_names"] = plant_names
+        updates["plant_id"] = primary_plant_id
+        updates["plant_name"] = primary_plant_name
     if body.get("password"):
         updates["password_hash"] = hash_password(body["password"])
         updates["security.last_password_change_at"] = utc_now()
@@ -130,6 +194,7 @@ def update_user(user_id: str):
     updates["updated_at"] = utc_now()
     db.users.update_one({"id": user_id}, {"$set": updates})
     updated = db.users.find_one({"id": user_id})
+    _record_user_activity("User Updated", actor, updated, updatedFields=sorted(updates.keys()))
     return success_response(serialize_user(updated))
 
 
@@ -147,6 +212,7 @@ def toggle_user_status(user_id: str):
     next_status = "Disabled" if user.get("status") == "Active" else "Active"
     db.users.update_one({"id": user_id}, {"$set": {"status": next_status, "updated_at": utc_now()}})
     updated = db.users.find_one({"id": user_id})
+    _record_user_activity("User Status Changed", actor, updated, previousStatus=user.get("status"), nextStatus=next_status)
     return success_response(serialize_user(updated))
 
 
@@ -164,4 +230,5 @@ def delete_user(user_id: str):
         return error_response(message or "Forbidden", 403)
 
     db.users.delete_one({"id": user_id})
+    _record_user_activity("User Deleted", actor, user)
     return success_response({"message": "User removed"})

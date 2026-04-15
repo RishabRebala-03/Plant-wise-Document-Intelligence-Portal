@@ -79,12 +79,18 @@ PLANTS = [
 
 
 USERS = [
-    {"id": "U001", "name": "David Richardson", "email": "d.richardson@midwestltd.com", "role": "CEO", "status": "Active", "plant_name": "All"},
-    {"id": "U002", "name": "John Carter", "email": "j.carter@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Alpha - Bloomington"},
-    {"id": "U003", "name": "Sarah Miller", "email": "s.miller@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Beta - Springfield"},
-    {"id": "U004", "name": "Mike Reynolds", "email": "m.reynolds@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Alpha - Bloomington"},
-    {"id": "U005", "name": "Admin User", "email": "admin@midwestltd.com", "role": "Admin", "status": "Active", "plant_name": "All"},
-    {"id": "U006", "name": "Tom Bradley", "email": "t.bradley@midwestltd.com", "role": "Mining Manager", "status": "Disabled", "plant_name": "Plant Gamma - Decatur"},
+    {"id": "U001", "name": "David Richardson", "email": "d.richardson@midwestltd.com", "role": "CEO", "status": "Active", "plant_name": "All", "assigned_plants": []},
+    {"id": "U002", "name": "John Carter", "email": "j.carter@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Alpha - Bloomington", "assigned_plants": ["Plant Alpha - Bloomington"]},
+    {"id": "U003", "name": "Sarah Miller", "email": "s.miller@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Beta - Springfield", "assigned_plants": ["Plant Beta - Springfield", "Plant Epsilon - Rockford"]},
+    {"id": "U004", "name": "Mike Reynolds", "email": "m.reynolds@midwestltd.com", "role": "Mining Manager", "status": "Active", "plant_name": "Plant Alpha - Bloomington", "assigned_plants": ["Plant Alpha - Bloomington", "Plant Delta - Peoria"]},
+    {"id": "U005", "name": "Admin User", "email": "admin@midwestltd.com", "role": "Admin", "status": "Active", "plant_name": "All", "assigned_plants": []},
+    {"id": "U006", "name": "Tom Bradley", "email": "t.bradley@midwestltd.com", "role": "Mining Manager", "status": "Disabled", "plant_name": "Plant Gamma - Decatur", "assigned_plants": ["Plant Gamma - Decatur"]},
+]
+
+
+IP_RULES = [
+    {"id": "IP001", "label": "Localhost", "address": "127.0.0.1", "status": "Allowed"},
+    {"id": "IP002", "label": "Private LAN", "address": "::1", "status": "Allowed"},
 ]
 
 
@@ -144,12 +150,15 @@ def seed_demo_data():
     for user in USERS:
         first_name, last_name = user["name"].split(" ", 1)
         plant = plant_by_name.get(user["plant_name"])
+        assigned_plants = [plant_by_name[name] for name in user.get("assigned_plants", []) if name in plant_by_name]
         user_docs.append(
             {
                 **user,
                 "first_name": first_name,
                 "last_name": last_name,
                 "plant_id": plant["id"] if plant else None,
+                "assigned_plant_ids": [plant["id"] for plant in assigned_plants],
+                "assigned_plant_names": [plant["name"] for plant in assigned_plants],
                 "password_hash": password_hash,
                 "notification_preferences": {
                     "new_document_upload": True,
@@ -167,6 +176,8 @@ def seed_demo_data():
                     "two_factor_enabled": False,
                     "last_password_change_at": now,
                 },
+                "active_session_id": None,
+                "session_started_at": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -231,12 +242,16 @@ def seed_demo_data():
     if activity_docs:
         db.activities.insert_many(activity_docs)
 
+    if IP_RULES:
+        db.ip_rules.insert_many([{**rule, "created_at": now, "last_updated_at": now} for rule in IP_RULES])
+
     set_sequence_value("users", 6)
     set_sequence_value("plants", 5)
     set_sequence_value("documents", 10)
     set_sequence_value("comments", 6)
     set_sequence_value("activities", 6)
     set_sequence_value("notifications", 0)
+    set_sequence_value("ip_rules", len(IP_RULES))
 
 
 def create_seed_app() -> Flask:
