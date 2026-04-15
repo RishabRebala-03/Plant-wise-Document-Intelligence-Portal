@@ -17,6 +17,8 @@ def serialize_user(user: dict[str, Any]) -> dict[str, Any]:
         "status": user["status"],
         "plant": user.get("plant_name") or "All",
         "plantId": user.get("plant_id"),
+        "assignedPlantIds": user.get("assigned_plant_ids", [user["plant_id"]] if user.get("plant_id") else []),
+        "assignedPlants": user.get("assigned_plant_names", [user.get("plant_name")] if user.get("plant_name") and user.get("plant_name") != "All" else []),
         "notificationPreferences": user.get("notification_preferences", {}),
         "displayPreferences": user.get("display_preferences", {}),
         "security": {

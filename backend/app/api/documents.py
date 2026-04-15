@@ -186,6 +186,10 @@ def cleanup_manager_comment_notifications() -> int:
 
 def _document_query_for_user(user: dict) -> dict:
     base = {"deleted_at": None}
+    if user["role"] == "Mining Manager":
+        assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
+        if assigned:
+            base["plant_id"] = {"$in": assigned}
     if user["role"] == "Mining Manager" and request.args.get("scope") == "mine":
         base["uploaded_by_id"] = user["id"]
     return base
@@ -202,6 +206,13 @@ def _can_manage_document(user: dict, document: dict) -> bool:
     if user["role"] in {"CEO", "Admin"}:
         return True
     return document.get("uploaded_by_id") == user["id"]
+
+
+def _can_view_document(user: dict, document: dict) -> bool:
+    if user["role"] in {"CEO", "Admin"}:
+        return True
+    assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
+    return document.get("plant_id") in assigned
 
 
 @documents_bp.get("/documents")
@@ -354,7 +365,8 @@ def create_document():
             documentName=name,
         )
         return error_response("Plant not found", 404)
-    if user["role"] == "Mining Manager" and user.get("plant_id") and user["plant_id"] != plant["id"]:
+    assigned_plant_ids = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
+    if user["role"] == "Mining Manager" and assigned_plant_ids and plant["id"] not in assigned_plant_ids:
         _log_document_event(
             "warning",
             "Document upload denied due to plant mismatch",
@@ -482,6 +494,8 @@ def get_document(document_id: str):
     if not document:
         _log_document_event("warning", "Document detail request failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to view this document", 403)
     comments = _visible_comments(document_id, user)
     _record_activity("Viewed", document, user, {"viewMode": "document"})
     _log_document_event(
@@ -676,6 +690,8 @@ def download_document(document_id: str):
     if not document:
         _log_document_event("warning", "Document download failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to download this document", 403)
     if not document.get("file_storage_id"):
         _log_document_event(
             "warning",
@@ -725,6 +741,8 @@ def list_comments(document_id: str):
     if not document:
         _log_document_event("warning", "Document comments request failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to view these comments", 403)
     comments = _visible_comments(document_id, user)
     _log_document_event(
         "info",

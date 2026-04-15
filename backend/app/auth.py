@@ -46,17 +46,19 @@ def create_access_token(user: dict[str, Any]) -> str:
         {
             "sub": user["id"],
             "role": user["role"],
+            "sid": user.get("active_session_id"),
             "type": "access",
         }
     )
 
 
-def create_refresh_token(user: dict[str, Any]) -> tuple[str, str]:
+def create_refresh_token(user: dict[str, Any], session_id: str) -> tuple[str, str]:
     jti = secrets.token_urlsafe(24)
     token = _encode_token(
         {
             "sub": user["id"],
             "role": user["role"],
+            "sid": session_id,
             "type": "refresh",
             "jti": jti,
         }
@@ -64,15 +66,46 @@ def create_refresh_token(user: dict[str, Any]) -> tuple[str, str]:
     return token, jti
 
 
-def issue_tokens(user: dict[str, Any]) -> dict[str, str]:
+def _active_session_id(user: dict[str, Any]) -> str:
+    return user.get("active_session_id") or secrets.token_urlsafe(18)
+
+
+def _revoke_user_refresh_tokens(user_id: str, *, keep_jti: str | None = None):
     db = get_db()
+    query: dict[str, Any] = {"user_id": user_id, "revoked": False}
+    if keep_jti:
+        query["jti"] = {"$ne": keep_jti}
+    db.refresh_tokens.update_many(
+        query,
+        {"$set": {"revoked": True, "revoked_at": utc_now(), "reason": "session_replaced"}},
+    )
+
+
+def issue_tokens(user: dict[str, Any], *, replace_existing: bool = False) -> dict[str, str]:
+    db = get_db()
+    session_id = _active_session_id(user)
+    if replace_existing:
+        db.users.update_one(
+            {"id": user["id"]},
+            {
+                "$set": {
+                    "active_session_id": session_id,
+                    "session_started_at": utc_now(),
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        _revoke_user_refresh_tokens(user["id"])
+        user = db.users.find_one({"id": user["id"]}) or {**user, "active_session_id": session_id}
+
     access_token = create_access_token(user)
-    refresh_token, jti = create_refresh_token(user)
+    refresh_token, jti = create_refresh_token(user, session_id)
     now = utc_now()
     db.refresh_tokens.insert_one(
         {
             "jti": jti,
             "user_id": user["id"],
+            "session_id": session_id,
             "token_hash": _fingerprint(refresh_token),
             "revoked": False,
             "created_at": now,
@@ -96,6 +129,12 @@ def revoke_refresh_token(refresh_token: str):
         {"jti": payload.get("jti")},
         {"$set": {"revoked": True, "revoked_at": utc_now()}},
     )
+    user = db.users.find_one({"id": payload.get("sub")})
+    if user and user.get("active_session_id") == payload.get("sid"):
+        db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"active_session_id": None, "updated_at": utc_now()}},
+        )
 
 
 def rotate_refresh_token(refresh_token: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
@@ -113,11 +152,14 @@ def rotate_refresh_token(refresh_token: str) -> tuple[dict[str, Any] | None, dic
     user = db.users.find_one({"id": payload["sub"]})
     if not user or user.get("status") != "Active":
         return None, None
+    if payload.get("sid") != user.get("active_session_id"):
+        _revoke_user_refresh_tokens(user["id"])
+        return None, None
     db.refresh_tokens.update_one(
         {"jti": payload["jti"]},
         {"$set": {"revoked": True, "rotated_at": utc_now()}},
     )
-    return user, issue_tokens(user)
+    return user, issue_tokens(user, replace_existing=False)
 
 
 def current_user() -> dict[str, Any] | None:
@@ -147,6 +189,8 @@ def require_auth(roles: list[str] | None = None):
             user = db.users.find_one({"id": payload["sub"]})
             if not user or user.get("status") != "Active":
                 return error_response("User is not active", 403)
+            if payload.get("sid") != user.get("active_session_id"):
+                return error_response("Session is no longer active", 401)
             if roles and user.get("role") not in roles:
                 return error_response("You do not have permission to perform this action", 403)
 

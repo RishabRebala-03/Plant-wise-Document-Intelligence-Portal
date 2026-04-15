@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { authApi } from "./api";
+import { AUTH_EXPIRED_EVENT, authApi } from "./api";
 import type { User } from "./types";
 
 type AuthContextValue = {
@@ -18,6 +18,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    const handleExpired = () => {
+      if (active) setUser(null);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleExpired);
 
     authApi
       .me()
@@ -33,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       active = false;
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpired);
     };
   }, []);
 

@@ -3,12 +3,38 @@ from __future__ import annotations
 from flask import Blueprint
 
 from ..auth import current_user, hash_password, require_auth, verify_password
-from ..db import get_db
+from ..db import get_db, next_public_id
 from ..serializers import serialize_user
 from ..utils import error_response, parse_json_body, success_response, utc_now
 
 
 settings_bp = Blueprint("settings", __name__)
+
+
+def _serialize_ip_rule(rule: dict) -> dict:
+    return {
+        "id": rule["id"],
+        "label": rule.get("label", ""),
+        "address": rule.get("address", ""),
+        "status": rule.get("status", "Review"),
+        "lastUpdated": rule.get("last_updated_at", rule.get("created_at")).date().isoformat() if rule.get("last_updated_at", rule.get("created_at")) else None,
+    }
+
+
+def _record_settings_activity(action: str, actor: dict, **metadata):
+    db = get_db()
+    db.activities.insert_one(
+        {
+            "id": next_public_id("activities", "EVT"),
+            "action": action,
+            "entity_type": "settings",
+            "entity_id": actor["id"],
+            "user_id": actor["id"],
+            "user_name": actor["name"],
+            "metadata": metadata,
+            "created_at": utc_now(),
+        }
+    )
 
 
 @settings_bp.get("/settings/me")
@@ -92,3 +118,62 @@ def update_password():
     )
     updated = db.users.find_one({"id": user["id"]})
     return success_response(serialize_user(updated))
+
+
+@settings_bp.get("/settings/ip-rules")
+@require_auth(["Admin"])
+def list_ip_rules():
+    db = get_db()
+    rules = [_serialize_ip_rule(rule) for rule in db.ip_rules.find({}).sort("label", 1)]
+    return success_response({"items": rules})
+
+
+@settings_bp.post("/settings/ip-rules")
+@require_auth(["Admin"])
+def create_ip_rule():
+    db = get_db()
+    body = parse_json_body()
+    label = (body.get("label") or "").strip()
+    address = (body.get("address") or "").strip()
+    status = (body.get("status") or "Allowed").strip()
+    if not label or not address:
+        return error_response("Label and IP address are required", 400)
+    if db.ip_rules.find_one({"address": address}):
+        return error_response("This IP address already exists", 409)
+    now = utc_now()
+    rule = {
+        "id": next_public_id("ip_rules", "IP"),
+        "label": label,
+        "address": address,
+        "status": status,
+        "created_at": now,
+        "last_updated_at": now,
+    }
+    db.ip_rules.insert_one(rule)
+    _record_settings_activity("IP Rule Created", current_user(), label=label, address=address, status=status)
+    return success_response(_serialize_ip_rule(rule), 201)
+
+
+@settings_bp.patch("/settings/ip-rules/<rule_id>")
+@require_auth(["Admin"])
+def update_ip_rule(rule_id: str):
+    db = get_db()
+    body = parse_json_body()
+    rule = db.ip_rules.find_one({"id": rule_id})
+    if not rule:
+        return error_response("IP rule not found", 404)
+    updates = {}
+    for source, target in (("label", "label"), ("address", "address"), ("status", "status")):
+        if body.get(source) is not None:
+            updates[target] = body[source].strip() if isinstance(body[source], str) else body[source]
+    if "address" in updates:
+        duplicate = db.ip_rules.find_one({"address": updates["address"], "id": {"$ne": rule_id}})
+        if duplicate:
+            return error_response("This IP address already exists", 409)
+    if not updates:
+        return error_response("No changes were supplied", 400)
+    updates["last_updated_at"] = utc_now()
+    db.ip_rules.update_one({"id": rule_id}, {"$set": updates})
+    updated = db.ip_rules.find_one({"id": rule_id})
+    _record_settings_activity("IP Rule Updated", current_user(), ruleId=rule_id, updatedFields=sorted(updates.keys()), address=updated.get("address"), status=updated.get("status"))
+    return success_response(_serialize_ip_rule(updated))

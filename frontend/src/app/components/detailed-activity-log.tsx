@@ -49,6 +49,8 @@ function detailRows(activity: Activity) {
   const rows: { label: string; value: string }[] = [
     { label: "Performed By", value: fallback(activity.userName || activity.userId) },
     { label: "Action Type", value: fallback(activity.action) },
+    { label: "Entity Type", value: fallback(activity.entityType) },
+    { label: "Entity ID", value: fallback(activity.entityId) },
     { label: "Document", value: fallback(activity.documentName || activity.entityId) },
     { label: "Document ID", value: fallback(activity.documentId || activity.entityId) },
     { label: "Plant", value: fallback(metadata.plantName || metadata.plantId) },
@@ -71,6 +73,15 @@ function detailRows(activity: Activity) {
   rows.push({
     label: "Comment Length",
     value: metadata.commentLength ? `${metadata.commentLength} chars` : "Not available",
+  });
+
+  Object.entries(metadata).forEach(([key, rawValue]) => {
+    if (rows.some((row) => row.label.toLowerCase() === key.toLowerCase())) return;
+    const value = Array.isArray(rawValue) ? rawValue.join(", ") : fallback(rawValue);
+    rows.push({
+      label: key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase()),
+      value,
+    });
   });
 
   return rows;
@@ -145,10 +156,10 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[240px] max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#999]" />
-          <input
+            <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by user, action, document, or plant..."
+            placeholder=""
             className="w-full h-9 pl-9 pr-3 border border-[#d9d9d9] bg-white text-[#333] placeholder-[#bbb] focus:border-[#0A6ED1] focus:outline-none"
             style={{ fontSize: 13 }}
           />

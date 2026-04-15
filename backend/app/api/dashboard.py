@@ -77,10 +77,10 @@ def manager_dashboard():
     db = get_db()
     user = current_user()
     now = utc_now()
-    plant_id = user.get("plant_id")
+    plant_ids = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
     query = {"deleted_at": None}
-    if plant_id:
-        query["plant_id"] = plant_id
+    if plant_ids:
+        query["plant_id"] = {"$in": plant_ids}
     documents = list(db.documents.find(query).sort("uploaded_at", -1))
     my_documents = [document for document in documents if document["uploaded_by_id"] == user["id"]]
     activities = list(db.activities.find({"user_id": user["id"]}).sort("created_at", -1).limit(10))
