@@ -1,3 +1,4 @@
+from .activities import activities_bp
 from .analytics import analytics_bp
 from .auth import auth_bp
 from .dashboard import dashboard_bp
@@ -10,6 +11,7 @@ from .users import users_bp
 
 def register_blueprints(app):
     for blueprint in (
+        activities_bp,
         auth_bp,
         dashboard_bp,
         documents_bp,

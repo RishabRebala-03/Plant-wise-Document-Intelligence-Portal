@@ -48,6 +48,7 @@ export interface PortalState {
   ipRules: IpRule[];
   sessionPolicy: SessionPolicy;
   managerDocumentLocks: Record<string, string[]>;
+  projectAssignments: Record<string, string>;
 }
 
 export interface EnrichedDocument extends DocumentRecord {
@@ -102,9 +103,9 @@ const DEFAULT_ACCESS_RULES: AccessRule[] = [
     plantsScope: "All plants",
     canCreateProjects: false,
     canUploadDocuments: false,
-    canEditDocuments: false,
-    canDeleteDocuments: false,
-    canManageUsers: false,
+    canEditDocuments: true,
+    canDeleteDocuments: true,
+    canManageUsers: true,
     canConfigureIp: false,
   },
   {
@@ -122,8 +123,8 @@ const DEFAULT_ACCESS_RULES: AccessRule[] = [
     plantsScope: "Governance view",
     canCreateProjects: false,
     canUploadDocuments: false,
-    canEditDocuments: false,
-    canDeleteDocuments: false,
+    canEditDocuments: true,
+    canDeleteDocuments: true,
     canManageUsers: true,
     canConfigureIp: true,
   },
@@ -137,8 +138,8 @@ const DEFAULT_IP_RULES: IpRule[] = [
 ];
 
 const DEFAULT_SESSION_POLICY: SessionPolicy = {
-  autoLogoutMinutes: 15,
-  conflictMode: "warn",
+  autoLogoutMinutes: 2,
+  conflictMode: "block",
   enforceSingleSession: true,
 };
 
@@ -185,6 +186,7 @@ export function defaultPortalState(plants: Plant[], documents: DocumentRecord[])
     ipRules: DEFAULT_IP_RULES,
     sessionPolicy: DEFAULT_SESSION_POLICY,
     managerDocumentLocks: {},
+    projectAssignments: {},
   };
 }
 
@@ -209,6 +211,7 @@ export function readPortalState(plants: Plant[], documents: DocumentRecord[]): P
       ipRules: parsed.ipRules || fallback.ipRules,
       sessionPolicy: parsed.sessionPolicy || fallback.sessionPolicy,
       managerDocumentLocks: parsed.managerDocumentLocks || {},
+      projectAssignments: parsed.projectAssignments || {},
     };
   } catch {
     return fallback;
@@ -263,6 +266,26 @@ export function updateSessionPolicy(state: PortalState, sessionPolicy: SessionPo
   };
 }
 
+export function assignDocumentToProject(state: PortalState, documentId: string, projectId: string) {
+  const projects = state.projects.map((project) => {
+    const isTarget = project.id === projectId;
+    const nextDocumentIds = project.documentIds.filter((id) => id !== documentId);
+    return {
+      ...project,
+      documentIds: isTarget ? [...nextDocumentIds, documentId] : nextDocumentIds,
+    };
+  });
+
+  return {
+    ...state,
+    projects,
+    projectAssignments: {
+      ...state.projectAssignments,
+      [documentId]: projectId,
+    },
+  };
+}
+
 export function lockManagerDocument(state: PortalState, managerId: string, documentId: string) {
   const existing = state.managerDocumentLocks[managerId] || [];
   if (existing.includes(documentId)) return state;
@@ -281,6 +304,7 @@ export function enrichDocuments(
   projects: ProjectRecord[],
   currentUser: User | null,
   plants: Plant[],
+  projectAssignments: Record<string, string> = {},
   filters?: {
     plantId?: string;
     projectId?: string;
@@ -299,7 +323,9 @@ export function enrichDocuments(
   const enriched: EnrichedDocument[] = documents
     .filter((document) => allowedPlantIds.has(document.plantId))
     .map((document) => {
+      const assignedProjectId = projectAssignments[document.id];
       const project =
+        projects.find((candidate) => candidate.id === assignedProjectId) ||
         projects.find((candidate) => candidate.documentIds.includes(document.id)) ||
         projects.find((candidate) => candidate.plantId === document.plantId) || {
           id: "unassigned",

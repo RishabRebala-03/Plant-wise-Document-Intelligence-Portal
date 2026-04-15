@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BarChart3, HardHat, ArrowRight } from "lucide-react";
+import { BarChart3, HardHat, ArrowRight, ShieldCheck, MapPinned } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const personas = [
@@ -14,14 +14,34 @@ const personas = [
     hint: "d.richardson@midwestltd.com",
   },
   {
+    role: "Admin",
+    name: "Admin User",
+    title: "Platform Administrator",
+    description: "User governance, access configuration, IP policy, and security operations.",
+    icon: ShieldCheck,
+    accent: "#354A5F",
+    bg: "#EEF2F5",
+    hint: "admin@midwestltd.com",
+  },
+  {
     role: "Mining Manager",
     name: "John Carter",
     title: "Mining Manager - Plant Alpha",
-    description: "Upload documents, manage plant-level records, and track submission status.",
+    description: "Create projects, upload within project workspaces, and track controlled document status.",
     icon: HardHat,
     accent: "#107E3E",
     bg: "#EBF5EF",
     hint: "j.carter@midwestltd.com",
+  },
+  {
+    role: "Mining Manager",
+    name: "Sarah Miller",
+    title: "Mining Manager - Plant Beta",
+    description: "Alternate manager perspective for plant-scoped navigation, projects, and document filtering.",
+    icon: MapPinned,
+    accent: "#5B738B",
+    bg: "#EEF2F5",
+    hint: "s.miller@midwestltd.com",
   },
 ];
 
@@ -71,14 +91,14 @@ export function LoginPage() {
               Sign In
             </h1>
             <p className="text-[#6a6d70] mt-1" style={{ fontSize: 13 }}>
-              Connect the frontend directly to your local Flask backend on port 8000.
+              Sign in by perspective to review the CEO, Admin, or Mining Manager experience against the local Flask backend.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-8">
             {personas.map((persona) => (
               <button
-                key={persona.role}
+                key={`${persona.role}-${persona.hint}`}
                 onClick={() => {
                   setEmail(persona.hint);
                   setPassword("Password123!");
@@ -112,7 +132,7 @@ export function LoginPage() {
                 </div>
                 <div className="px-5 py-2.5 border-t border-[#f0f0f0] flex items-center justify-between" style={{ background: persona.bg }}>
                   <span style={{ fontSize: 11, color: persona.accent, fontWeight: 500 }}>
-                    Quick Demo Sign-In
+                    Perspective Sign-In
                   </span>
                   <span className="text-[#999]" style={{ fontSize: 11 }}>
                     {persona.hint}

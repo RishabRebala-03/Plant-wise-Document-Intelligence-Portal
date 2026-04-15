@@ -65,8 +65,9 @@ import {
 import { LoginPage } from "./components/login-page";
 import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
+import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { documentsApi, notificationsApi, plantsApi, usersApi } from "./lib/api";
+import { activitiesApi, documentsApi, notificationsApi, plantsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -87,7 +88,7 @@ import {
   type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Comment, DocumentRecord, NotificationItem, Plant, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -125,7 +126,7 @@ type NavItem = {
 const PortalContext = createContext<PortalContextValue | null>(null);
 const SESSION_STORAGE_PREFIX = "midwest.activeSession";
 const SESSION_WARNING_SECONDS = 60;
-const CHART_COLORS = ["#0f766e", "#ea580c", "#1d4ed8", "#7c3aed", "#be123c"];
+const CHART_COLORS = ["#0A6ED1", "#107E3E", "#5B738B", "#354A5F", "#7F97AD"];
 
 function usePortal() {
   const value = useContext(PortalContext);
@@ -218,7 +219,7 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
   }, [plants.length, portalState, rawDocuments.length]);
 
   const documents = useMemo(() => {
-    const enriched = enrichDocuments(rawDocuments, portalState.projects, user, plants);
+    const enriched = enrichDocuments(rawDocuments, portalState.projects, user, plants, portalState.projectAssignments);
     return withManagerLocks(enriched, portalState, user);
   }, [plants, portalState, rawDocuments, user]);
 
@@ -379,10 +380,10 @@ function MetricCard({
   onClick?: () => void;
 }) {
   const tones = {
-    teal: "from-teal-600/12 to-emerald-600/6 text-teal-700",
-    amber: "from-amber-500/12 to-orange-500/6 text-amber-700",
-    blue: "from-blue-600/12 to-cyan-600/6 text-blue-700",
-    rose: "from-rose-600/12 to-pink-600/6 text-rose-700",
+    teal: "from-[#107E3E]/12 to-[#D5F6DE]/40 text-[#107E3E]",
+    amber: "from-[#D1E8FF]/80 to-[#EAF3FC] text-[#0A6ED1]",
+    blue: "from-[#0A6ED1]/12 to-[#EAF3FC] text-[#0A6ED1]",
+    rose: "from-[#EAECEE] to-[#F5F6F7] text-[#354A5F]",
   };
 
   return (
@@ -432,6 +433,8 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
           { label: "Analytics", path: "/analytics", icon: LineChartIcon },
+          { label: "Manager Access", path: "/oversight", icon: UserCog },
+          { label: "Audit Logs", path: "/activity-logs", icon: Clock3 },
         ],
         common,
       ];
@@ -455,19 +458,20 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
         { label: "IP Configuration", path: "/admin/network", icon: Network },
         { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
+        { label: "Audit Logs", path: "/admin/activity-logs", icon: LineChartIcon },
       ],
       common,
     ];
   }, [user.plantId, user.role]);
 
   return (
-    <div className={`${isCeo ? "bg-[radial-gradient(circle_at_top_left,_rgba(249,115,22,0.20),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(251,146,60,0.18),_transparent_28%),linear-gradient(180deg,_#fff7ed,_#fff1e6)]" : "bg-[radial-gradient(circle_at_top_left,_rgba(15,118,110,0.18),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(234,88,12,0.12),_transparent_28%),linear-gradient(180deg,_#f8fafc,_#eef4f7)]"} min-h-screen text-slate-900`}>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.12),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(91,115,139,0.10),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] text-slate-900">
       <header className="sticky top-0 z-30 border-b border-white/60 bg-slate-950/95 px-5 py-4 text-white backdrop-blur">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="text-xs uppercase tracking-[0.24em] text-white/50">Plant-wise document intelligence</div>
             <div className="mt-1 flex items-center gap-3">
-              <div className={`rounded-2xl px-3 py-1 text-xs font-semibold text-slate-950 ${isCeo ? "bg-orange-400" : "bg-teal-500"}`}>MW</div>
+              <div className="rounded-2xl bg-[#D1E8FF] px-3 py-1 text-xs font-semibold text-[#0A6ED1]">MW</div>
               <div>
                 <div className="text-lg font-semibold">Midwest Operations Portal</div>
                 <div className="text-sm text-white/60">{formatRole(user.role)} workspace</div>
@@ -476,7 +480,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           </div>
 
           <div className="flex items-center gap-3">
-            <div className={`rounded-full px-3 py-1 text-xs font-medium ${session.conflictDetected ? "bg-rose-500/20 text-rose-100" : session.warningOpen ? "bg-amber-400/20 text-amber-100" : "bg-white/10 text-white/80"}`}>
+            <div className={`rounded-full px-3 py-1 text-xs font-medium ${session.conflictDetected ? "bg-[#BB0000]/20 text-white" : session.warningOpen ? "bg-[#D1E8FF]/20 text-[#D1E8FF]" : "bg-white/10 text-white/80"}`}>
               {session.conflictDetected
                 ? "Session conflict detected"
                 : session.warningOpen
@@ -537,7 +541,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       </header>
 
       {session.warningOpen ? (
-        <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+        <div className="border-b border-[#BBD4F6] bg-[#EAF3FC] px-5 py-3 text-sm text-[#0A6ED1]">
           Your session will expire in {session.secondsRemaining} seconds.{" "}
           <button onClick={session.extendSession} className="font-semibold underline">
             Stay signed in
@@ -546,7 +550,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       ) : null}
 
       {session.conflictDetected || session.sessionExpiredReason ? (
-        <div className="border-b border-rose-200 bg-rose-50 px-5 py-3 text-sm text-rose-900">
+        <div className="border-b border-[#D9D9D9] bg-[#F5F6F7] px-5 py-3 text-sm text-[#354A5F]">
           {session.sessionExpiredReason || "A newer login was detected for this account. To avoid session overlap, this tab is now locked."}
         </div>
       ) : null}
@@ -554,7 +558,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       <div className="relative mx-auto flex w-full max-w-[1600px] gap-6 px-4 py-6 lg:px-6">
         {session.conflictDetected || session.sessionExpiredReason ? (
           <div className="absolute inset-0 z-20 flex items-start justify-center px-4 pt-10">
-            <div className="w-full max-w-2xl rounded-[32px] border border-rose-200 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.18)]">
+            <div className="w-full max-w-2xl rounded-[32px] border border-[#D9D9D9] bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.18)]">
               <div className="text-lg font-semibold text-slate-900">Session attention required</div>
               <div className="mt-2 text-sm text-slate-600">
                 {session.sessionExpiredReason || "Another active session was detected for this account. To prevent conflicting actions, this tab is locked."}
@@ -575,7 +579,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
 
         <aside className="hidden w-72 shrink-0 lg:block">
           <div className="sticky top-28 space-y-4 rounded-[28px] border border-white/70 bg-white/85 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
-            <div className={`rounded-3xl p-4 text-white ${isCeo ? "bg-[linear-gradient(135deg,_#c2410c,_#fb923c)]" : "bg-[linear-gradient(135deg,_#0f766e,_#134e4a)]"}`}>
+            <div className={`rounded-3xl p-4 text-white ${isCeo ? "bg-[linear-gradient(135deg,_#0A6ED1,_#0854A0)]" : "bg-[linear-gradient(135deg,_#354A5F,_#5B738B)]"}`}>
               <div className="text-xs uppercase tracking-[0.24em] text-white/60">Current scope</div>
               <div className="mt-2 text-lg font-semibold">{user.role === "CEO" ? "Enterprise view" : user.plant || "Administration"}</div>
               <div className="mt-1 text-sm text-white/70">
@@ -651,7 +655,7 @@ function CeoDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#7c2d12,_#f97316)] px-6 py-8 text-white shadow-[0_28px_80px_rgba(124,45,18,0.28)]">
+      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0A6ED1,_#0854A0)] px-6 py-8 text-white shadow-[0_28px_80px_rgba(10,110,209,0.24)]">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-3xl">
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">CEO dashboard</div>
@@ -676,7 +680,7 @@ function CeoDashboardPage() {
         <MetricCard label="Active Plants" value={plants.length} hint="Plants contributing to the current executive view." icon={Building2} tone="amber" onClick={() => navigate("/plants")} />
         <MetricCard label="Projects" value={projects.length} hint="Derived plus locally created project workspaces." icon={FolderKanban} tone="blue" onClick={() => navigate("/plants")} />
         <MetricCard label="Documents" value={documents.length} hint="All indexed records across the enterprise scope." icon={FileText} tone="amber" onClick={() => navigate("/documents")} />
-        <MetricCard label="Mining Managers" value={miningManagers} hint="Managers currently configured in the system." icon={Users} tone="rose" onClick={() => navigate("/analytics")} />
+        <MetricCard label="Mining Managers" value={miningManagers} hint="Managers currently configured in the system." icon={Users} tone="rose" onClick={() => navigate("/oversight")} />
         <MetricCard label="Dormant Plants" value={stalledPlants.length} hint="Plants with no upload in the past 14 days." icon={TriangleAlert} tone="rose" onClick={() => navigate("/analytics")} />
       </div>
 
@@ -689,8 +693,8 @@ function CeoDashboardPage() {
                 <XAxis dataKey="name" stroke="#64748b" />
                 <YAxis stroke="#64748b" />
                 <Tooltip />
-                <Bar dataKey="documents" fill="#f97316" radius={[10, 10, 0, 0]} />
-                <Bar dataKey="projects" fill="#ea580c" radius={[10, 10, 0, 0]} />
+                <Bar dataKey="documents" fill="#0A6ED1" radius={[10, 10, 0, 0]} />
+                <Bar dataKey="projects" fill="#5B738B" radius={[10, 10, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -727,11 +731,11 @@ function CeoDashboardPage() {
               <Link
                 key={item.plantId}
                 to={`/plants/${item.plantId}`}
-                className="group rounded-3xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-orange-300 hover:bg-white"
+                className="group rounded-3xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-[#BBD4F6] hover:bg-white"
               >
                 <div className="flex items-center justify-between">
                   <div className="text-base font-semibold text-slate-900">{item.plant}</div>
-                  <Building2 size={18} className="text-slate-400 transition group-hover:text-orange-600" />
+                  <Building2 size={18} className="text-slate-400 transition group-hover:text-[#0A6ED1]" />
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
                   <div>
@@ -755,13 +759,13 @@ function CeoDashboardPage() {
         <SectionCard title="Executive watchlist" subtitle="Plants that need follow-up">
           <div className="space-y-3">
             {(stalledPlants.length ? stalledPlants : plants.slice(0, 3)).map((plant) => (
-              <div key={plant.id} className="rounded-3xl border border-amber-100 bg-amber-50 p-4">
+              <div key={plant.id} className="rounded-3xl border border-[#D1E8FF] bg-[#F5FAFF] p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="font-semibold text-slate-900">{plant.name}</div>
                     <div className="mt-1 text-sm text-slate-600">Last upload: {formatDate(plant.lastUpload)}</div>
                   </div>
-                  <Link to={`/plants/${plant.id}`} className="text-sm font-semibold text-orange-700 hover:text-orange-900">
+                  <Link to={`/plants/${plant.id}`} className="text-sm font-semibold text-[#0A6ED1] hover:text-[#0854A0]">
                     Open
                   </Link>
                 </div>
@@ -1149,7 +1153,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                   <td className="px-4 py-4 font-mono text-xs text-slate-600">{document.identifier}</td>
                   <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
                   <td className="px-4 py-4">
-                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${document.accessLocked ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${document.accessLocked ? "bg-[#EAECEE] text-[#354A5F]" : "bg-[#EBF5EF] text-[#107E3E]"}`}>
                       {document.accessLocked ? "Locked after access" : "Available"}
                     </span>
                   </td>
@@ -1226,7 +1230,7 @@ function DocumentDetailPage() {
       </section>
 
       {user.role === "Mining Manager" ? (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+        <div className="rounded-3xl border border-[#BBD4F6] bg-[#EAF3FC] px-5 py-4 text-sm text-[#0A6ED1]">
           Managers now have a read-only detail experience. Edit and delete options are removed, and this record is locked once accessed.
         </div>
       ) : null}
@@ -1430,7 +1434,7 @@ function AnalyticsPage() {
                 <Tooltip />
                 <Legend />
                 <Line type="monotone" dataKey="uploads" name="Uploads" stroke="#1d4ed8" strokeWidth={3} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="locked" name="Locked" stroke="#be123c" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="locked" name="Locked" stroke="#5B738B" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -1464,7 +1468,7 @@ function AnalyticsPage() {
                 <Tooltip />
                 <Legend />
                 <Bar dataKey="documents" name="Documents" fill="#0f766e" radius={[10, 10, 0, 0]} />
-                <Bar dataKey="projects" name="Projects" fill="#ea580c" radius={[10, 10, 0, 0]} />
+                <Bar dataKey="projects" name="Projects" fill="#5B738B" radius={[10, 10, 0, 0]} />
                 <Bar dataKey="avgPerProject" name="Docs / Project" fill="#1d4ed8" radius={[10, 10, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -1512,7 +1516,7 @@ function AnalyticsPage() {
                 <PolarRadiusAxis />
                 <Radar name="Documents" dataKey="documents" stroke="#1d4ed8" fill="#1d4ed8" fillOpacity={0.2} />
                 <Radar name="Projects x10" dataKey="projects" stroke="#0f766e" fill="#0f766e" fillOpacity={0.2} />
-                <Radar name="Locks x8" dataKey="locks" stroke="#be123c" fill="#be123c" fillOpacity={0.16} />
+                <Radar name="Locks x8" dataKey="locks" stroke="#5B738B" fill="#5B738B" fillOpacity={0.16} />
                 <Legend />
                 <Tooltip />
               </RadarChart>
@@ -1529,8 +1533,8 @@ function AnalyticsPage() {
                 <YAxis type="category" dataKey="name" stroke="#64748b" width={130} />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="documents" name="Documents" fill="#7c3aed" radius={[0, 10, 10, 0]} />
-                <Bar dataKey="privateNotes" name="Private note signals" fill="#f97316" radius={[0, 10, 10, 0]} />
+                <Bar dataKey="documents" name="Documents" fill="#0A6ED1" radius={[0, 10, 10, 0]} />
+                <Bar dataKey="privateNotes" name="Private note signals" fill="#5B738B" radius={[0, 10, 10, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1626,7 +1630,7 @@ function AdminDashboardPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        <AdminTile title="User management" body="Create users, toggle status, and review role assignments." to="/admin/users" icon={UserCog} />
+        <AdminTile title="Manager oversight" body="Edit, remove, or inactivate manager accounts." to="/admin/users" icon={UserCog} />
         <AdminTile title="Access control" body="Adjust frontend role visibility and privileged actions." to="/admin/access" icon={ShieldCheck} />
         <AdminTile title="IP configuration" body="Maintain allowed, blocked, and review network addresses." to="/admin/network" icon={Globe} />
         <AdminTile title="Session policies" body="Configure auto logout and concurrent session handling." to="/admin/sessions" icon={Clock3} />
@@ -1649,52 +1653,220 @@ function AdminTile({ title, body, to, icon: Icon }: { title: string; body: strin
   );
 }
 
-function AdminUsersPage() {
-  const { users, refreshData } = usePortal();
+function ManagerOversightPage() {
+  const { user, users, plants, refreshData } = usePortal();
   const [search, setSearch] = useState("");
-  const filtered = users.filter((user) => [user.name, user.email, user.role, user.plant || ""].join(" ").toLowerCase().includes(search.toLowerCase()));
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState<string | null>(null);
+  const [editor, setEditor] = useState<User | null>(null);
+  const [draft, setDraft] = useState({ name: "", email: "", plantId: "", status: "Active" });
+
+  const managers = useMemo(
+    () => users.filter((candidate) => candidate.role === "Mining Manager"),
+    [users],
+  );
+
+  const filtered = useMemo(
+    () =>
+      managers.filter((candidate) =>
+        [candidate.name, candidate.email, candidate.plant || "", candidate.status]
+          .join(" ")
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+      ),
+    [managers, search],
+  );
+
+  function openEditor(target: User) {
+    setEditor(target);
+    setDraft({
+      name: target.name,
+      email: target.email,
+      plantId: target.plantId || "",
+      status: target.status,
+    });
+    setError("");
+    setMessage("");
+  }
+
+  async function saveManager() {
+    if (!editor) return;
+    setSubmitting(editor.id);
+    setError("");
+    setMessage("");
+    try {
+      await usersApi.update(editor.id, {
+        name: draft.name,
+        email: draft.email,
+        plantId: draft.plantId,
+        status: draft.status,
+      });
+      setEditor(null);
+      setMessage(`${draft.name} was updated successfully.`);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update manager.");
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
+  async function toggleManager(target: User) {
+    setSubmitting(target.id);
+    setError("");
+    setMessage("");
+    try {
+      await usersApi.toggleStatus(target.id);
+      setMessage(`${target.name} is now ${target.status === "Active" ? "inactive" : "active"}.`);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update manager status.");
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
+  async function removeManager(target: User) {
+    const confirmed = window.confirm(`Remove ${target.name} from the platform? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setSubmitting(target.id);
+    setError("");
+    setMessage("");
+    try {
+      await usersApi.remove(target.id);
+      setMessage(`${target.name} was removed.`);
+      if (editor?.id === target.id) setEditor(null);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to remove manager.");
+    } finally {
+      setSubmitting(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Users" }]} />
-      <SectionCard title="User management" subtitle="Admin-only controls for people, roles, and account state">
-        <div className="mb-4">
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users..." className="h-12 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+      <Breadcrumbs items={user.role === "Admin" ? [{ label: "Admin", to: "/admin" }, { label: "Users" }] : [{ label: "Manager Access" }]} />
+      <SectionCard
+        title="Manager oversight"
+        subtitle={user.role === "Admin" ? "Admin can update, remove, and inactivate manager accounts." : "CEO can review, edit, remove, and revoke access for mining managers."}
+      >
+        <div className="grid gap-4 md:grid-cols-3">
+          <MetricCard label="Managers" value={managers.length} hint="Mining manager accounts in the system." icon={Users} tone="blue" />
+          <MetricCard label="Active" value={managers.filter((candidate) => candidate.status === "Active").length} hint="Managers currently allowed to log in." icon={ShieldCheck} />
+          <MetricCard label="Inactive" value={managers.filter((candidate) => candidate.status !== "Active").length} hint="Disabled managers awaiting reactivation." icon={Lock} tone="rose" />
         </div>
-        <div className="overflow-hidden rounded-[28px] border border-slate-200">
+
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by manager, email, or plant..."
+            className="h-12 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+          />
+          {message ? <div className="text-sm text-emerald-700">{message}</div> : null}
+          {error ? <div className="text-sm text-[#BB0000]">{error}</div> : null}
+        </div>
+
+        <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr className="text-left text-sm text-slate-500">
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Role</th>
+                <th className="px-4 py-3 font-medium">Manager</th>
                 <th className="px-4 py-3 font-medium">Email</th>
                 <th className="px-4 py-3 font-medium">Plant</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
-              {filtered.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-4 py-4 font-semibold text-slate-900">{user.name}</td>
-                  <td className="px-4 py-4 text-slate-600">{formatRole(user.role)}</td>
-                  <td className="px-4 py-4 text-slate-600">{user.email}</td>
-                  <td className="px-4 py-4 text-slate-600">{user.plant || "All plants"}</td>
+              {filtered.map((candidate) => (
+                <tr key={candidate.id}>
                   <td className="px-4 py-4">
-                    <button
-                      onClick={async () => {
-                        await usersApi.toggleStatus(user.id);
-                        await refreshData();
-                      }}
-                      className={`rounded-full px-3 py-1 text-xs font-medium ${user.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}
-                    >
-                      {user.status === "Active" ? "Disable" : "Enable"}
-                    </button>
+                    <div className="font-semibold text-slate-900">{candidate.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">{candidate.id}</div>
+                  </td>
+                  <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
+                  <td className="px-4 py-4 text-slate-600">{candidate.plant || "All plants"}</td>
+                  <td className="px-4 py-4">
+                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${candidate.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                      {candidate.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => openEditor(candidate)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => void toggleManager(candidate)}
+                        disabled={submitting === candidate.id}
+                        className="rounded-full border border-[#BBD4F6] bg-[#EAF3FC] px-3 py-1 text-xs font-medium text-[#0A6ED1] transition hover:bg-[#DDEEFF] disabled:opacity-60"
+                      >
+                        {candidate.status === "Active" ? "Mark inactive" : "Reactivate"}
+                      </button>
+                      <button
+                        onClick={() => void removeManager(candidate)}
+                        disabled={submitting === candidate.id}
+                        className="rounded-full border border-[#D9D9D9] bg-[#F5F6F7] px-3 py-1 text-xs font-medium text-[#354A5F] transition hover:bg-[#ECEFF1] disabled:opacity-60"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
+              {!filtered.length ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">No managers matched the current search.</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
+
+        {editor ? (
+          <div className="mt-6 grid gap-4 rounded-[28px] border border-slate-200 bg-slate-50 p-5 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <div className="text-lg font-semibold text-slate-900">Edit manager</div>
+              <div className="mt-1 text-sm text-slate-500">Update the manager record, plant assignment, or access status.</div>
+            </div>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Name</span>
+              <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Email</span>
+              <input value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Plant assignment</span>
+              <select value={draft.plantId} onChange={(event) => setDraft((current) => ({ ...current, plantId: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                <option value="">Select plant</option>
+                {plants.map((plant) => (
+                  <option key={plant.id} value={plant.id}>{plant.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Status</span>
+              <select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                <option value="Active">Active</option>
+                <option value="Disabled">Disabled</option>
+              </select>
+            </label>
+            <div className="md:col-span-2 flex flex-wrap gap-3">
+              <button onClick={() => void saveManager()} disabled={submitting === editor.id} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                Save changes
+              </button>
+              <button onClick={() => setEditor(null)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
       </SectionCard>
     </div>
   );
@@ -1792,10 +1964,10 @@ function AdminSessionsPage() {
             <span className="font-medium text-slate-700">Auto logout minutes</span>
             <input
               type="number"
-              min={5}
+              min={2}
               max={120}
               value={policy.autoLogoutMinutes}
-              onChange={(event) => setSessionPolicyValue({ ...policy, autoLogoutMinutes: Number(event.target.value) || 15 })}
+              onChange={(event) => setSessionPolicyValue({ ...policy, autoLogoutMinutes: Math.max(2, Number(event.target.value) || 2) })}
               className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
             />
           </label>
@@ -1813,6 +1985,38 @@ function AdminSessionsPage() {
           <AccessToggle label="Enforce single active session" checked={policy.enforceSingleSession} onChange={(checked) => setSessionPolicyValue({ ...policy, enforceSingleSession: checked })} />
         </div>
       </SectionCard>
+    </div>
+  );
+}
+
+function ActivityLogsPage() {
+  const { user } = usePortal();
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    activitiesApi
+      .list()
+      .then((result) => setActivities(result.items))
+      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load activity logs."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={user.role === "Admin" ? [{ label: "Admin", to: "/admin" }, { label: "Audit Logs" }] : [{ label: "Audit Logs" }]} />
+      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#334155)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.22)]">
+        <div className="text-xs uppercase tracking-[0.26em] text-white/55">Security and audit visibility</div>
+        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Platform activity logs</h1>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
+          Login-adjacent actions, document events, and user-driven activity are centralized here for executive and administrative review.
+        </p>
+      </section>
+
+      {loading ? <SectionCard title="Loading logs"><div className="text-sm text-slate-500">Fetching the latest activity stream...</div></SectionCard> : null}
+      {!loading && error ? <SectionCard title="Logs unavailable"><div className="text-sm text-[#BB0000]">{error}</div></SectionCard> : null}
+      {!loading && !error ? <DetailedActivityLog activities={activities} /> : null}
     </div>
   );
 }
@@ -1849,12 +2053,15 @@ function AppContent() {
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentDetailPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
+          { path: "oversight", element: <RoleGate allowed={["CEO"]}><ManagerOversightPage /></RoleGate> },
+          { path: "activity-logs", element: <RoleGate allowed={["CEO"]}><ActivityLogsPage /></RoleGate> },
           { path: "upload", element: <RoleGate allowed={["Mining Manager"]}><ManagerUpload /></RoleGate> },
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
-          { path: "admin/users", element: <RoleGate allowed={["Admin"]}><AdminUsersPage /></RoleGate> },
+          { path: "admin/users", element: <RoleGate allowed={["Admin"]}><ManagerOversightPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
           { path: "admin/network", element: <RoleGate allowed={["Admin"]}><AdminNetworkPage /></RoleGate> },
           { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },
+          { path: "admin/activity-logs", element: <RoleGate allowed={["Admin"]}><ActivityLogsPage /></RoleGate> },
           { path: "settings", element: <RoleGate allowed={["CEO", "Mining Manager"]}><SettingsPage /></RoleGate> },
           { path: "admin/settings", element: <RoleGate allowed={["Admin"]}><SettingsPage /></RoleGate> },
           { path: "*", element: <Navigate to={defaultHome(user.role)} replace /> },

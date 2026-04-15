@@ -1,5 +1,6 @@
 import type {
   AnalyticsData,
+  Activity,
   CeoDashboardData,
   Comment,
   DocumentRecord,
@@ -272,6 +273,18 @@ export const analyticsApi = {
   },
 };
 
+export const activitiesApi = {
+  list(params: Record<string, string | undefined> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") {
+        search.set(key, value);
+      }
+    });
+    return apiFetch<{ items: Activity[] }>(`/activities${search.toString() ? `?${search.toString()}` : ""}`);
+  },
+};
+
 export const usersApi = {
   list() {
     return apiFetch<User[]>("/users");
@@ -292,6 +305,9 @@ export const usersApi = {
   },
   toggleStatus(userId: string) {
     return apiFetch<User>(`/users/${userId}/toggle-status`, { method: "POST" });
+  },
+  remove(userId: string) {
+    return apiFetch<{ message: string }>(`/users/${userId}`, { method: "DELETE" });
   },
 };
 
@@ -332,4 +348,3 @@ export const notificationsApi = {
     });
   },
 };
-

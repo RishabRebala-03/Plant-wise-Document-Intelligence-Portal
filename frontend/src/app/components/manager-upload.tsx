@@ -7,6 +7,7 @@ import {
 import { categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { DocumentRecord, ManagerDashboardData, Plant } from "../lib/types";
+import { assignDocumentToProject, persistPortalState, readPortalState, type ProjectRecord } from "../lib/portal";
 import { DocumentDrawer } from "./document-drawer";
 
 export function ManagerUpload() {
@@ -14,6 +15,7 @@ export function ManagerUpload() {
   const { user } = useAuth();
   const [data, setData] = useState<ManagerDashboardData | null>(null);
   const [plants, setPlants] = useState<Plant[]>([]);
+  const [allProjects, setAllProjects] = useState<ProjectRecord[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<DocumentRecord | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,6 +27,7 @@ export function ManagerUpload() {
   const [form, setForm] = useState({
     company: "Midwest Ltd",
     plant: user?.plantId || "",
+    projectId: "",
     name: "",
     category: "",
     comments: "",
@@ -42,9 +45,14 @@ export function ManagerUpload() {
   }
 
   async function load() {
-    const [dashboard, plantsResult] = await Promise.all([dashboardApi.manager(), plantsApi.list()]);
+    const [dashboard, plantsResult, documentsResult] = await Promise.all([
+      dashboardApi.manager(),
+      plantsApi.list(),
+      documentsApi.list({ page: 1, pageSize: 500 }),
+    ]);
     setData(dashboard);
     setPlants(plantsResult.items);
+    setAllProjects(readPortalState(plantsResult.items, documentsResult.items).projects);
   }
 
   useEffect(() => {
@@ -62,10 +70,12 @@ export function ManagerUpload() {
     }
   }, [user]);
 
+  const availableProjects = allProjects.filter((project) => !form.plant || project.plantId === form.plant);
+
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.plant || !form.name || !form.category) {
-      setMessage("Please fill in plant, document name, and category.");
+    if (!form.plant || !form.projectId || !form.name || !form.category) {
+      setMessage("Please fill in plant, project, document name, and category.");
       setMessageType("error");
       return;
     }
@@ -78,6 +88,7 @@ export function ManagerUpload() {
     const formData = new FormData();
     formData.append("company", form.company);
     formData.append("plantId", form.plant);
+    formData.append("projectId", form.projectId);
     formData.append("name", form.name);
     formData.append("category", form.category);
     formData.append("comments", form.comments);
@@ -88,9 +99,13 @@ export function ManagerUpload() {
     setMessageType("");
     try {
       const created = await documentsApi.create(formData);
+      const latestDocuments = await documentsApi.list({ page: 1, pageSize: 500 });
+      const portalState = readPortalState(plants, latestDocuments.items);
+      persistPortalState(assignDocumentToProject(portalState, created.id, form.projectId));
       setForm({
         company: "Midwest Ltd",
         plant: user?.plantId || "",
+        projectId: "",
         name: "",
         category: "",
         comments: "",
@@ -135,7 +150,7 @@ export function ManagerUpload() {
           </p>
         </div>
         <button
-          onClick={() => navigate("/manager/docs")}
+          onClick={() => navigate("/documents")}
           className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0"
           style={{ fontSize: 13 }}
         >
@@ -146,7 +161,7 @@ export function ManagerUpload() {
       <div className="grid grid-cols-3 gap-5 mb-8">
         {[
           { label: "My Documents", value: data.stats.myDocuments, icon: FileText, color: "#0A6ED1", bg: "#EBF4FD" },
-          { label: "Uploaded This Week", value: data.stats.uploadedThisWeek, icon: Clock, color: "#E9730C", bg: "#FEF3E7" },
+          { label: "Uploaded This Week", value: data.stats.uploadedThisWeek, icon: Clock, color: "#5B738B", bg: "#EEF2F5" },
           { label: "Approved", value: data.stats.approved, icon: CheckCircle2, color: "#107E3E", bg: "#EBF5EF" },
         ].map((stat) => (
           <div key={stat.label} className="bg-white border border-[#e8e8e8] px-5 py-5 flex items-center gap-4">
@@ -236,13 +251,27 @@ export function ManagerUpload() {
                     <label className="block text-[#444] mb-1.5" style={{ fontSize: 13, fontWeight: 500 }}>Plant</label>
                     <select
                       value={form.plant}
-                      onChange={(e) => setForm({ ...form, plant: e.target.value })}
+                      onChange={(e) => setForm({ ...form, plant: e.target.value, projectId: "" })}
                       className="w-full h-9 px-3 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none"
                       style={{ fontSize: 13 }}
                     >
                       <option value="">Select Plant</option>
                       {plants.map((plant) => (
                         <option key={plant.id} value={plant.id}>{plant.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[#444] mb-1.5" style={{ fontSize: 13, fontWeight: 500 }}>Project</label>
+                    <select
+                      value={form.projectId}
+                      onChange={(e) => setForm({ ...form, projectId: e.target.value })}
+                      className="w-full h-9 px-3 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none"
+                      style={{ fontSize: 13 }}
+                    >
+                      <option value="">Select Project</option>
+                      {availableProjects.map((project) => (
+                        <option key={project.id} value={project.id}>{project.name}</option>
                       ))}
                     </select>
                   </div>

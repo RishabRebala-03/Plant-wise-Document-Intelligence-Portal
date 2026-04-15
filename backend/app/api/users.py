@@ -11,6 +11,26 @@ from ..utils import error_response, parse_json_body, success_response, utc_now
 users_bp = Blueprint("users", __name__)
 
 
+def _current_user():
+    from ..auth import current_user
+
+    return current_user()
+
+
+def _can_manage_user(actor: dict, target: dict, *, allow_delete: bool = False) -> tuple[bool, str | None]:
+    if actor["role"] == "Admin":
+        if target["id"] == actor["id"] and allow_delete:
+            return False, "You cannot delete your own account"
+        return True, None
+
+    if actor["role"] == "CEO":
+        if target.get("role") != "Mining Manager":
+            return False, "CEO access is limited to mining manager accounts"
+        return True, None
+
+    return False, "You do not have permission to manage this user"
+
+
 @users_bp.get("/users")
 @require_auth(["Admin", "CEO"])
 def list_users():
@@ -70,26 +90,36 @@ def create_user():
 
 
 @users_bp.patch("/users/<user_id>")
-@require_auth(["Admin"])
+@require_auth(["Admin", "CEO"])
 def update_user(user_id: str):
     db = get_db()
     body = parse_json_body()
     user = db.users.find_one({"id": user_id})
     if not user:
         return error_response("User not found", 404)
+    actor = _current_user()
+    allowed, message = _can_manage_user(actor, user)
+    if not allowed:
+        return error_response(message or "Forbidden", 403)
 
     updates = {}
-    for field in ("name", "email", "role", "status"):
+    editable_fields = ("name", "email", "status") if actor["role"] == "CEO" else ("name", "email", "role", "status")
+    for field in editable_fields:
         if body.get(field) is not None:
             updates[field] = body[field].strip() if isinstance(body[field], str) else body[field]
     if "email" in updates:
         updates["email"] = updates["email"].lower()
     if body.get("plantId") is not None:
-        plant = db.plants.find_one({"id": body["plantId"]})
-        if not plant:
-            return error_response("Plant not found", 404)
-        updates["plant_id"] = plant["id"]
-        updates["plant_name"] = plant["name"]
+        plant_id = body["plantId"]
+        if plant_id:
+            plant = db.plants.find_one({"id": plant_id})
+            if not plant:
+                return error_response("Plant not found", 404)
+            updates["plant_id"] = plant["id"]
+            updates["plant_name"] = plant["name"]
+        else:
+            updates["plant_id"] = None
+            updates["plant_name"] = "All"
     if body.get("password"):
         updates["password_hash"] = hash_password(body["password"])
         updates["security.last_password_change_at"] = utc_now()
@@ -104,13 +134,34 @@ def update_user(user_id: str):
 
 
 @users_bp.post("/users/<user_id>/toggle-status")
-@require_auth(["Admin"])
+@require_auth(["Admin", "CEO"])
 def toggle_user_status(user_id: str):
     db = get_db()
     user = db.users.find_one({"id": user_id})
     if not user:
         return error_response("User not found", 404)
+    actor = _current_user()
+    allowed, message = _can_manage_user(actor, user)
+    if not allowed:
+        return error_response(message or "Forbidden", 403)
     next_status = "Disabled" if user.get("status") == "Active" else "Active"
     db.users.update_one({"id": user_id}, {"$set": {"status": next_status, "updated_at": utc_now()}})
     updated = db.users.find_one({"id": user_id})
     return success_response(serialize_user(updated))
+
+
+@users_bp.delete("/users/<user_id>")
+@require_auth(["Admin", "CEO"])
+def delete_user(user_id: str):
+    db = get_db()
+    user = db.users.find_one({"id": user_id})
+    if not user:
+        return error_response("User not found", 404)
+
+    actor = _current_user()
+    allowed, message = _can_manage_user(actor, user, allow_delete=True)
+    if not allowed:
+        return error_response(message or "Forbidden", 403)
+
+    db.users.delete_one({"id": user_id})
+    return success_response({"message": "User removed"})
