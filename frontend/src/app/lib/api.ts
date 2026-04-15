@@ -15,6 +15,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const ACCESS_TOKEN_KEY = "midwest.accessToken";
 const REFRESH_TOKEN_KEY = "midwest.refreshToken";
 export const AUTH_EXPIRED_EVENT = "midwest:auth-expired";
+export const LIVE_SYNC_INTERVAL_MS = 10000;
 
 type Tokens = {
   accessToken: string | null;
@@ -54,13 +55,27 @@ export function clearTokens() {
   persistTokens({ accessToken: null, refreshToken: null });
 }
 
+function getClientFingerprintHeader() {
+  const payload = {
+    userAgent: navigator.userAgent,
+    language: navigator.language,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    platform: navigator.platform,
+    screen: `${window.screen.width}x${window.screen.height}`,
+  };
+  return window.btoa(JSON.stringify(payload));
+}
+
 async function tryRefreshToken() {
   const { refreshToken } = getStoredTokens();
   if (!refreshToken) return false;
 
   const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-Fingerprint": getClientFingerprintHeader(),
+    },
     body: JSON.stringify({ refreshToken }),
   });
 
@@ -85,6 +100,7 @@ async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   if (!options.skipAuth && accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
+  headers.set("X-Client-Fingerprint", getClientFingerprintHeader());
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -116,6 +132,7 @@ async function apiFetchBlob(path: string, options: ApiOptions = {}): Promise<{ b
   if (!options.skipAuth && accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
+  headers.set("X-Client-Fingerprint", getClientFingerprintHeader());
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -160,7 +177,10 @@ export const authApi = {
   async login(email: string, password: string) {
     const data = await apiFetch<{ user: User; access_token: string; refresh_token: string }>("/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Client-Fingerprint": getClientFingerprintHeader(),
+      },
       body: JSON.stringify({ email, password }),
       skipAuth: true,
     });

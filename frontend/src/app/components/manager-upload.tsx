@@ -4,7 +4,7 @@ import {
   Upload, FileText, Clock,
   CloudUpload, ArrowRight, Paperclip,
 } from "lucide-react";
-import { categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { DocumentRecord, ManagerDashboardData, Plant } from "../lib/types";
 import { assignDocumentToProject, persistPortalState, readPortalState, type ProjectRecord } from "../lib/portal";
@@ -62,6 +62,13 @@ export function ManagerUpload() {
         setMessageType("error");
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, LIVE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {

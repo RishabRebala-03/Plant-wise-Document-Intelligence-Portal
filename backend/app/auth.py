@@ -6,20 +6,24 @@ from datetime import timedelta
 from functools import wraps
 from typing import Any, Callable
 
+import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask import current_app, g, request
-from werkzeug.security import check_password_hash, generate_password_hash
 
 from .db import get_db
+from .security import build_request_fingerprint, fingerprint_hash, queue_security_alert, record_audit_event
 from .utils import error_response, utc_now
 
 
 def hash_password(password: str) -> str:
-    return generate_password_hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return check_password_hash(password_hash, password)
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -79,6 +83,10 @@ def _revoke_user_refresh_tokens(user_id: str, *, keep_jti: str | None = None):
         query,
         {"$set": {"revoked": True, "revoked_at": utc_now(), "reason": "session_replaced"}},
     )
+    db.active_sessions.update_many(
+        {"user_id": user_id, "revoked_at": None},
+        {"$set": {"revoked_at": utc_now(), "revoked_reason": "session_replaced"}},
+    )
 
 
 def issue_tokens(user: dict[str, Any], *, replace_existing: bool = False) -> dict[str, str]:
@@ -112,7 +120,7 @@ def issue_tokens(user: dict[str, Any], *, replace_existing: bool = False) -> dic
             "expires_at": now.replace(microsecond=0) + timedelta(days=current_app.config["REFRESH_TOKEN_TTL_DAYS"]),
         }
     )
-    return {"access_token": access_token, "refresh_token": refresh_token}
+    return {"access_token": access_token, "refresh_token": refresh_token, "session_id": session_id}
 
 
 def revoke_refresh_token(refresh_token: str):
@@ -135,6 +143,10 @@ def revoke_refresh_token(refresh_token: str):
             {"id": user["id"]},
             {"$set": {"active_session_id": None, "updated_at": utc_now()}},
         )
+    db.active_sessions.update_many(
+        {"session_id": payload.get("sid"), "revoked_at": None},
+        {"$set": {"revoked_at": utc_now(), "revoked_reason": "logout"}},
+    )
 
 
 def rotate_refresh_token(refresh_token: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
@@ -166,6 +178,29 @@ def current_user() -> dict[str, Any] | None:
     return getattr(g, "current_user", None)
 
 
+def register_active_session(user: dict[str, Any], session_id: str):
+    db = get_db()
+    fingerprint = build_request_fingerprint()
+    now = utc_now()
+    db.active_sessions.update_one(
+        {"session_id": session_id},
+        {
+            "$set": {
+                "session_id": session_id,
+                "user_id": user["id"],
+                "client_ip": request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr,
+                "user_agent": request.headers.get("User-Agent", ""),
+                "fingerprint": fingerprint,
+                "fingerprint_hash": fingerprint_hash(fingerprint),
+                "last_seen_at": now,
+                "created_at": now,
+                "revoked_at": None,
+            }
+        },
+        upsert=True,
+    )
+
+
 def require_auth(roles: list[str] | None = None):
     def decorator(fn: Callable):
         @wraps(fn)
@@ -191,11 +226,42 @@ def require_auth(roles: list[str] | None = None):
                 return error_response("User is not active", 403)
             if payload.get("sid") != user.get("active_session_id"):
                 return error_response("Session is no longer active", 401)
+            active_session = db.active_sessions.find_one({"session_id": payload.get("sid"), "revoked_at": None})
+            if not active_session:
+                return error_response("Session is no longer active", 401)
+            current_fingerprint = build_request_fingerprint()
+            current_fingerprint_hash = fingerprint_hash(current_fingerprint)
+            if active_session.get("fingerprint_hash") and active_session.get("fingerprint_hash") != current_fingerprint_hash:
+                record_audit_event(
+                    "Session Fingerprint Mismatch",
+                    user=user,
+                    resource_type="session",
+                    resource_id=payload.get("sid"),
+                    status="blocked",
+                    severity="high",
+                    metadata={"storedFingerprint": active_session.get("fingerprint"), "currentFingerprint": current_fingerprint},
+                )
+                queue_security_alert(
+                    "session_fingerprint_mismatch",
+                    title="Suspicious session fingerprint detected",
+                    detail=f"Fingerprint validation failed for {user['name']}.",
+                    metadata={"userId": user["id"], "sessionId": payload.get("sid")},
+                )
+                db.active_sessions.update_one(
+                    {"session_id": payload.get("sid")},
+                    {"$set": {"revoked_at": utc_now(), "revoked_reason": "fingerprint_mismatch"}},
+                )
+                return error_response("Session validation failed", 401)
             if roles and user.get("role") not in roles:
                 return error_response("You do not have permission to perform this action", 403)
 
+            db.active_sessions.update_one(
+                {"session_id": payload.get("sid")},
+                {"$set": {"last_seen_at": utc_now()}},
+            )
             g.current_user = user
             g.access_token_payload = payload
+            g.active_session = active_session
             return fn(*args, **kwargs)
 
         return wrapped

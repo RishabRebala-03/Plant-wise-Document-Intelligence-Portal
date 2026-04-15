@@ -67,7 +67,7 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
+import { LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -219,6 +219,14 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     return () => {
       active = false;
     };
+  }, [user.id]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadAll().catch(() => undefined);
+    }, LIVE_SYNC_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
   }, [user.id]);
 
   useEffect(() => {

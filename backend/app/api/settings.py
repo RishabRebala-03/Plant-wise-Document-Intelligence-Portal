@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
+
 from flask import Blueprint
 
 from ..auth import current_user, hash_password, require_auth, verify_password
 from ..db import get_db, next_public_id
+from ..security import record_audit_event
 from ..serializers import serialize_user
 from ..utils import error_response, parse_json_body, success_response, utc_now
 
@@ -37,6 +40,17 @@ def _record_settings_activity(action: str, actor: dict, **metadata):
     )
 
 
+def _validate_ip_rule_address(address: str) -> bool:
+    try:
+        if "/" in address:
+            ipaddress.ip_network(address, strict=False)
+        else:
+            ipaddress.ip_address(address)
+        return True
+    except ValueError:
+        return False
+
+
 @settings_bp.get("/settings/me")
 @require_auth()
 def get_settings():
@@ -62,6 +76,7 @@ def update_profile():
     updates["updated_at"] = utc_now()
     db.users.update_one({"id": user["id"]}, {"$set": updates})
     updated = db.users.find_one({"id": user["id"]})
+    record_audit_event("Profile Updated", user=user, resource_type="settings", resource_id=user["id"], metadata={"updatedFields": sorted(updates.keys())})
     return success_response(serialize_user(updated))
 
 
@@ -85,6 +100,7 @@ def update_preferences():
     updates["updated_at"] = utc_now()
     db.users.update_one({"id": user["id"]}, {"$set": updates})
     updated = db.users.find_one({"id": user["id"]})
+    record_audit_event("Preferences Updated", user=user, resource_type="settings", resource_id=user["id"], metadata={"updatedFields": sorted(updates.keys())})
     return success_response(serialize_user(updated))
 
 
@@ -117,6 +133,7 @@ def update_password():
         },
     )
     updated = db.users.find_one({"id": user["id"]})
+    record_audit_event("Password Updated", user=user, resource_type="settings", resource_id=user["id"])
     return success_response(serialize_user(updated))
 
 
@@ -138,6 +155,8 @@ def create_ip_rule():
     status = (body.get("status") or "Allowed").strip()
     if not label or not address:
         return error_response("Label and IP address are required", 400)
+    if not _validate_ip_rule_address(address):
+        return error_response("Enter a valid IP address or CIDR range", 400)
     if db.ip_rules.find_one({"address": address}):
         return error_response("This IP address already exists", 409)
     now = utc_now()
@@ -151,6 +170,7 @@ def create_ip_rule():
     }
     db.ip_rules.insert_one(rule)
     _record_settings_activity("IP Rule Created", current_user(), label=label, address=address, status=status)
+    record_audit_event("IP Rule Created", user=current_user(), resource_type="ip_rule", resource_id=rule["id"], metadata={"address": address, "status": status})
     return success_response(_serialize_ip_rule(rule), 201)
 
 
@@ -167,6 +187,8 @@ def update_ip_rule(rule_id: str):
         if body.get(source) is not None:
             updates[target] = body[source].strip() if isinstance(body[source], str) else body[source]
     if "address" in updates:
+        if not _validate_ip_rule_address(updates["address"]):
+            return error_response("Enter a valid IP address or CIDR range", 400)
         duplicate = db.ip_rules.find_one({"address": updates["address"], "id": {"$ne": rule_id}})
         if duplicate:
             return error_response("This IP address already exists", 409)
@@ -176,4 +198,5 @@ def update_ip_rule(rule_id: str):
     db.ip_rules.update_one({"id": rule_id}, {"$set": updates})
     updated = db.ip_rules.find_one({"id": rule_id})
     _record_settings_activity("IP Rule Updated", current_user(), ruleId=rule_id, updatedFields=sorted(updates.keys()), address=updated.get("address"), status=updated.get("status"))
+    record_audit_event("IP Rule Updated", user=current_user(), resource_type="ip_rule", resource_id=rule_id, metadata={"updatedFields": sorted(updates.keys())})
     return success_response(_serialize_ip_rule(updated))

@@ -76,5 +76,8 @@ def parse_int(value: str | None, default: int, minimum: int | None = None, maxim
 
 def get_pagination() -> tuple[int, int]:
     page = parse_int(request.args.get("page"), 1, minimum=1)
-    page_size = parse_int(request.args.get("page_size"), 25, minimum=1, maximum=100)
+    page_size_value = request.args.get("page_size")
+    if page_size_value is None:
+        page_size_value = request.args.get("pageSize")
+    page_size = parse_int(page_size_value, 25, minimum=1, maximum=100)
     return page, page_size

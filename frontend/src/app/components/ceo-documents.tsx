@@ -4,7 +4,7 @@ import {
   Search, Filter, Download, Eye, MessageSquare,
   Lock, Globe, SlidersHorizontal, X, ChevronDown, RefreshCw, ChevronLeft, ChevronRight,
 } from "lucide-react";
-import { categoryOptions, documentsApi, plantsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 
@@ -26,7 +26,6 @@ const DOCUMENT_COLUMNS: Array<{
 ];
 
 export function CeoDocuments() {
-  const LIVE_REFRESH_INTERVAL_MS = 10000;
   const location = useLocation();
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [plants, setPlants] = useState<Plant[]>([]);
@@ -39,7 +38,7 @@ export function CeoDocuments() {
   const [sortBy, setSortBy] = useState<"date" | "name" | "plant">("date");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [liveViewEnabled, setLiveViewEnabled] = useState(false);
+  const [liveViewEnabled, setLiveViewEnabled] = useState(true);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [hiddenColumns, setHiddenColumns] = useState<DocumentColumnId[]>([]);
   const [error, setError] = useState("");
@@ -89,7 +88,7 @@ export function CeoDocuments() {
       void loadDocuments({ silent: true, keepCurrentSelection: Boolean(selectedDoc) }).catch((err) => {
         setError(err instanceof Error ? err.message : "Live view refresh failed.");
       });
-    }, LIVE_REFRESH_INTERVAL_MS);
+    }, LIVE_SYNC_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
   }, [liveViewEnabled, filterCategory, filterPlant, search, sortBy, selectedDoc]);
@@ -188,7 +187,7 @@ export function CeoDocuments() {
           </p>
           <p className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
             {liveViewEnabled
-              ? `Live View is on. Refreshing every ${LIVE_REFRESH_INTERVAL_MS / 1000} seconds${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`
+              ? `Live View is on. Refreshing every ${LIVE_SYNC_INTERVAL_MS / 1000} seconds${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`
               : `Live View is off${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`}
           </p>
         </div>

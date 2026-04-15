@@ -100,7 +100,10 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
         (activity.documentName || "").toLowerCase().includes(needle) ||
         (activity.userName || "").toLowerCase().includes(needle) ||
         String(activity.metadata?.plantName || "").toLowerCase().includes(needle);
-      const matchesAction = !actionFilter || activity.action.toLowerCase() === actionFilter;
+      const matchesAction =
+        !actionFilter ||
+        activity.action.toLowerCase() === actionFilter ||
+        activity.action.toLowerCase().includes(actionFilter);
       return matchesSearch && matchesAction;
     });
   }, [activities, actionFilter, search]);

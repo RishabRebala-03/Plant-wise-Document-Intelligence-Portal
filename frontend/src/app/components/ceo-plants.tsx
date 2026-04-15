@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Building2, TrendingUp, AlertCircle, MapPin, Clock } from "lucide-react";
-import { plantsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, plantsApi } from "../lib/api";
 import type { Plant } from "../lib/types";
 
 export function CeoPlants() {
@@ -9,19 +9,37 @@ export function CeoPlants() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadPlants(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setLoading(true);
+    }
+    try {
+      const result = await plantsApi.list();
+      setPlants(result.items);
+      setSummary({
+        totalPlants: result.summary.totalPlants ?? result.items.length,
+        operational: result.summary.operational ?? 0,
+        needsAttention: result.summary.needsAttention ?? 0,
+      });
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load plants.");
+    } finally {
+      if (!options?.silent) {
+        setLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
-    plantsApi
-      .list()
-      .then((result) => {
-        setPlants(result.items);
-        setSummary({
-          totalPlants: result.summary.totalPlants ?? result.items.length,
-          operational: result.summary.operational ?? 0,
-          needsAttention: result.summary.needsAttention ?? 0,
-        });
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load plants."))
-      .finally(() => setLoading(false));
+    void loadPlants();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadPlants({ silent: true });
+    }, LIVE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading plants...</div>;

@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { BarChart2, TrendingUp, Activity, Calendar, RefreshCw } from "lucide-react";
-import { analyticsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, analyticsApi } from "../lib/api";
 import type { AnalyticsData } from "../lib/types";
 
 export function CeoAnalytics() {
-  const LIVE_REFRESH_INTERVAL_MS = 10000;
   const [period, setPeriod] = useState("6m");
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [liveViewEnabled, setLiveViewEnabled] = useState(false);
+  const [liveViewEnabled, setLiveViewEnabled] = useState(true);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -45,7 +44,7 @@ export function CeoAnalytics() {
 
     const timer = window.setInterval(() => {
       void loadAnalytics({ silent: true });
-    }, LIVE_REFRESH_INTERVAL_MS);
+    }, LIVE_SYNC_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
   }, [liveViewEnabled, period]);
@@ -67,7 +66,7 @@ export function CeoAnalytics() {
           </p>
           <p className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
             {liveViewEnabled
-              ? `Live analytics is on. Refreshing every ${LIVE_REFRESH_INTERVAL_MS / 1000} seconds${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`
+              ? `Live analytics is on. Refreshing every ${LIVE_SYNC_INTERVAL_MS / 1000} seconds${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`
               : `Live analytics is off${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`}
           </p>
         </div>

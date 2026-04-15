@@ -4,7 +4,7 @@ import {
   FileText, Clock, CheckCircle2, Activity,
   ArrowRight, AlertCircle, BarChart2,
 } from "lucide-react";
-import { dashboardApi, documentsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, dashboardApi, documentsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { DocumentRecord, ManagerDashboardData } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
@@ -17,12 +17,31 @@ export function ManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
+  async function loadDashboard(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setLoading(true);
+    }
+    try {
+      setData(await dashboardApi.manager());
+      setMessage("");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Unable to load manager dashboard.");
+    } finally {
+      if (!options?.silent) {
+        setLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
-    dashboardApi
-      .manager()
-      .then(setData)
-      .catch((err) => setMessage(err instanceof Error ? err.message : "Unable to load manager dashboard."))
-      .finally(() => setLoading(false));
+    void loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadDashboard({ silent: true });
+    }, LIVE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   async function openDocument(document: DocumentRecord) {

@@ -175,6 +175,8 @@ def seed_demo_data():
                 "security": {
                     "two_factor_enabled": False,
                     "last_password_change_at": now,
+                    "failed_login_attempts": 0,
+                    "lock_until": None,
                 },
                 "active_session_id": None,
                 "session_started_at": None,
@@ -203,6 +205,8 @@ def seed_demo_data():
                 "created_at": document["uploaded_at"],
                 "updated_at": document["uploaded_at"],
                 "deleted_at": None,
+                "accessed_by": [],
+                "last_receiver_access_at": None,
             }
         )
     db.documents.insert_many(document_docs)
@@ -252,6 +256,8 @@ def seed_demo_data():
     set_sequence_value("activities", 6)
     set_sequence_value("notifications", 0)
     set_sequence_value("ip_rules", len(IP_RULES))
+    set_sequence_value("audit_logs", 0)
+    set_sequence_value("security_alerts", 0)
 
 
 def create_seed_app() -> Flask:

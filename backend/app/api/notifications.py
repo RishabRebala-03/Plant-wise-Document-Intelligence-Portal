@@ -116,6 +116,14 @@ def list_notifications():
 
     if user["role"] in {"CEO", "Admin"}:
         notifications = _build_exec_notifications(user)
+        if user["role"] == "Admin":
+            stored_notifications = list(db.notifications.find({"user_id": user["id"]}).sort("created_at", -1).limit(20))
+            notifications.extend(stored_notifications)
+            notifications.sort(key=lambda item: ensure_utc(item.get("created_at")) or utc_now(), reverse=True)
+            deduped = {}
+            for notification in notifications:
+                deduped[notification["id"]] = notification
+            notifications = list(deduped.values())[:20]
         return success_response(
             {
                 "items": [serialize_notification(notification) for notification in notifications],

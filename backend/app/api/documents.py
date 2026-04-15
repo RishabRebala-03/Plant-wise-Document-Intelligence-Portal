@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import csv
 import io
+from pathlib import Path
 from flask import Blueprint, Response, current_app, request, send_file
+from werkzeug.utils import secure_filename
 
 from ..auth import current_user, require_auth
 from ..db import get_db, get_fs, next_public_id
+from ..security import record_audit_event
 from ..serializers import serialize_comment, serialize_document
 from ..utils import error_response, get_pagination, parse_bool, parse_json_body, success_response, utc_now
 
@@ -205,6 +208,8 @@ def _visible_comments(document_id: str, user: dict) -> list[dict]:
 def _can_manage_document(user: dict, document: dict) -> bool:
     if user["role"] in {"CEO", "Admin"}:
         return True
+    if document.get("accessed_by"):
+        return False
     return document.get("uploaded_by_id") == user["id"]
 
 
@@ -213,6 +218,47 @@ def _can_view_document(user: dict, document: dict) -> bool:
         return True
     assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
     return document.get("plant_id") in assigned
+
+
+def _validate_uploaded_file(file) -> tuple[str, str] | None:
+    file_name = secure_filename(file.filename or "")
+    extension = Path(file_name).suffix.lstrip(".").lower()
+    content_type = (file.mimetype or "").lower()
+    if not file_name:
+        return None
+    if extension not in current_app.config["ALLOWED_UPLOAD_EXTENSIONS"]:
+        return None
+    if content_type not in current_app.config["ALLOWED_UPLOAD_CONTENT_TYPES"]:
+        return None
+    return file_name, content_type
+
+
+def _mark_document_accessed(document_id: str, user: dict, *, mode: str):
+    if user["role"] not in {"CEO", "Admin"}:
+        return
+    db = get_db()
+    existing = db.documents.find_one({"id": document_id, "accessed_by.user_id": user["id"]}, {"id": 1})
+    if existing:
+        db.documents.update_one(
+            {"id": document_id, "accessed_by.user_id": user["id"]},
+            {"$set": {"last_receiver_access_at": utc_now(), "updated_at": utc_now()}},
+        )
+        return
+    db.documents.update_one(
+        {"id": document_id},
+        {
+            "$push": {
+                "accessed_by": {
+                    "user_id": user["id"],
+                    "user_name": user["name"],
+                    "role": user["role"],
+                    "accessed_at": utc_now(),
+                    "mode": mode,
+                }
+            },
+            "$set": {"last_receiver_access_at": utc_now(), "updated_at": utc_now()},
+        },
+    )
 
 
 @documents_bp.get("/documents")
@@ -383,6 +429,10 @@ def create_document():
     content_type = None
     size_bytes = None
     if file and file.filename:
+        validated = _validate_uploaded_file(file)
+        if not validated:
+            return error_response("Unsupported file type. Allowed uploads are PDF, Office documents, and PNG/JPEG images.", 400)
+        safe_file_name, normalized_content_type = validated
         data = file.read()
         size_bytes = len(data)
         _log_document_event(
@@ -404,9 +454,13 @@ def create_document():
                 maxAllowedBytes=current_app.config["MAX_CONTENT_LENGTH"],
             )
             return error_response("Uploaded file exceeds the configured size limit", 413)
-        file_storage_id = get_fs().upload_from_stream(file.filename, io.BytesIO(data), metadata={"content_type": file.mimetype})
-        file_name = file.filename
-        content_type = file.mimetype
+        file_storage_id = get_fs().upload_from_stream(
+            safe_file_name,
+            io.BytesIO(data),
+            metadata={"content_type": normalized_content_type},
+        )
+        file_name = safe_file_name
+        content_type = normalized_content_type
         _log_document_event(
             "info",
             "Document file stored in GridFS",
@@ -445,6 +499,8 @@ def create_document():
         "created_at": now,
         "updated_at": now,
         "deleted_at": None,
+        "accessed_by": [],
+        "last_receiver_access_at": None,
     }
     _log_document_event(
         "info",
@@ -481,6 +537,13 @@ def create_document():
         contentType=document.get("content_type"),
         sizeBytes=document.get("size_bytes"),
     )
+    record_audit_event(
+        "Document Uploaded",
+        user=user,
+        resource_type="document",
+        resource_id=document["id"],
+        metadata={"plantId": document["plant_id"], "status": document["status"], "version": document["version"]},
+    )
     return success_response(serialize_document(document, []), 201)
 
 
@@ -496,6 +559,7 @@ def get_document(document_id: str):
         return error_response("Document not found", 404)
     if not _can_view_document(user, document):
         return error_response("You do not have permission to view this document", 403)
+    _mark_document_accessed(document_id, user, mode="detail")
     comments = _visible_comments(document_id, user)
     _record_activity("Viewed", document, user, {"viewMode": "document"})
     _log_document_event(
@@ -505,6 +569,7 @@ def get_document(document_id: str):
         **_document_log_context(document),
         visibleComments=len(comments),
     )
+    record_audit_event("Document Viewed", user=user, resource_type="document", resource_id=document_id)
     return success_response({"document": serialize_document(document, comments), "comments": [serialize_comment(c) for c in comments]})
 
 
@@ -526,6 +591,8 @@ def update_document(document_id: str):
             **_document_log_context(document),
             reason="permission_denied",
         )
+        if document.get("accessed_by") and user["role"] == "Mining Manager":
+            return error_response("Document is locked after executive access and can no longer be changed by the uploader", 403)
         return error_response("You do not have permission to update this document", 403)
 
     body = request.form.to_dict() if request.files or request.form else parse_json_body()
@@ -560,6 +627,10 @@ def update_document(document_id: str):
 
     file = request.files.get("file")
     if file and file.filename:
+        validated = _validate_uploaded_file(file)
+        if not validated:
+            return error_response("Unsupported file type. Allowed uploads are PDF, Office documents, and PNG/JPEG images.", 400)
+        safe_file_name, normalized_content_type = validated
         data = file.read()
         size_bytes = len(data)
         _log_document_event(
@@ -583,12 +654,16 @@ def update_document(document_id: str):
                 maxAllowedBytes=current_app.config["MAX_CONTENT_LENGTH"],
             )
             return error_response("Uploaded file exceeds the configured size limit", 413)
-        file_storage_id = get_fs().upload_from_stream(file.filename, io.BytesIO(data), metadata={"content_type": file.mimetype})
+        file_storage_id = get_fs().upload_from_stream(
+            safe_file_name,
+            io.BytesIO(data),
+            metadata={"content_type": normalized_content_type},
+        )
         updates.update(
             {
                 "file_storage_id": file_storage_id,
-                "file_name": file.filename,
-                "content_type": file.mimetype,
+                "file_name": safe_file_name,
+                "content_type": normalized_content_type,
                 "size_bytes": size_bytes,
                 "version": int(document.get("version", 1)) + 1,
             }
@@ -642,6 +717,13 @@ def update_document(document_id: str):
         sizeBytes=updated.get("size_bytes"),
         approvalCompleted=previous_status != updated.get("status") and updated.get("status") == "Approved",
     )
+    record_audit_event(
+        "Document Updated",
+        user=user,
+        resource_type="document",
+        resource_id=document_id,
+        metadata={"updatedFields": changed_fields, "status": updated.get("status"), "version": updated.get("version")},
+    )
     comments = _visible_comments(document_id, user)
     return success_response(serialize_document(updated, comments))
 
@@ -664,6 +746,8 @@ def delete_document(document_id: str):
             **_document_log_context(document),
             reason="permission_denied",
         )
+        if document.get("accessed_by") and user["role"] == "Mining Manager":
+            return error_response("Document is locked after executive access and can no longer be deleted by the uploader", 403)
         return error_response("You do not have permission to delete this document", 403)
 
     now = utc_now()
@@ -677,6 +761,7 @@ def delete_document(document_id: str):
         **_document_log_context(document),
         deletedAt=now.isoformat(),
     )
+    record_audit_event("Document Deleted", user=user, resource_type="document", resource_id=document_id)
     return success_response({"message": "Document deleted"})
 
 
@@ -700,6 +785,7 @@ def download_document(document_id: str):
             **_document_log_context(document),
         )
         return error_response("No file is attached to this document", 404)
+    _mark_document_accessed(document_id, user, mode="download")
 
     stream = io.BytesIO()
     get_fs().download_to_stream(document["file_storage_id"], stream)
@@ -723,6 +809,7 @@ def download_document(document_id: str):
         contentType=document.get("content_type"),
         sizeBytes=document.get("size_bytes"),
     )
+    record_audit_event("Document Downloaded", user=user, resource_type="document", resource_id=document_id)
     return send_file(
         stream,
         download_name=document.get("file_name") or f"{document_id}.bin",
@@ -835,5 +922,12 @@ def add_comment(document_id: str):
         commentId=comment["id"],
         visibility=visibility,
         commentLength=len(text),
+    )
+    record_audit_event(
+        "Document Commented",
+        user=user,
+        resource_type="document",
+        resource_id=document_id,
+        metadata={"visibility": visibility, "commentLength": len(text)},
     )
     return success_response(serialize_comment(comment), 201)

@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 import {
   Search, Filter, Eye, Download, Trash2, X, ChevronDown,
 } from "lucide-react";
-import { categoryOptions, documentsApi, plantsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 
@@ -24,7 +24,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function load() {
+  async function load(options?: { keepCurrentSelection?: boolean }) {
     const [docsResult, plantsResult] = await Promise.all([
       documentsApi.list({
         scope: mine ? "mine" : undefined,
@@ -36,6 +36,14 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
     ]);
     setDocuments(docsResult.items);
     setPlants(plantsResult.items);
+    if (options?.keepCurrentSelection && selectedDoc) {
+      const refreshed = docsResult.items.find((item) => item.id === selectedDoc.id);
+      if (refreshed) {
+        const detail = await documentsApi.get(refreshed.id);
+        setSelectedDoc(detail.document);
+        setSelectedComments(detail.comments);
+      }
+    }
   }
 
   useEffect(() => {
@@ -43,6 +51,13 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
       .catch((err) => setError(err instanceof Error ? err.message : "Unable to load documents."))
       .finally(() => setLoading(false));
   }, [filterCategory, filterPlant, mine, search]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void load({ keepCurrentSelection: Boolean(selectedDoc) }).catch(() => undefined);
+    }, LIVE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [filterCategory, filterPlant, mine, search, selectedDoc]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);

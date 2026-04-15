@@ -4,7 +4,7 @@ import {
   TrendingUp, ArrowRight, AlertCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router";
-import { dashboardApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, dashboardApi } from "../lib/api";
 import type { CeoDashboardData } from "../lib/types";
 
 export function CeoDashboard() {
@@ -13,12 +13,31 @@ export function CeoDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadDashboard(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setLoading(true);
+    }
+    try {
+      setData(await dashboardApi.ceo());
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load dashboard.");
+    } finally {
+      if (!options?.silent) {
+        setLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
-    dashboardApi
-      .ceo()
-      .then(setData)
-      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load dashboard."))
-      .finally(() => setLoading(false));
+    void loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadDashboard({ silent: true });
+    }, LIVE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading dashboard...</div>;
