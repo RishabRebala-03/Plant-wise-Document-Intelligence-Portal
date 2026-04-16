@@ -7,6 +7,7 @@ import type {
   ManagerDashboardData,
   NotificationItem,
   Plant,
+  ProjectRecord,
   SessionRecord,
   User,
 } from "./types";
@@ -291,6 +292,19 @@ export const plantsApi = {
   async list() {
     const data = await apiFetch<{ summary: Record<string, number>; items: Plant[] }>("/plants");
     return data;
+  },
+};
+
+export const projectsApi = {
+  list() {
+    return apiFetch<{ items: ProjectRecord[] }>("/projects");
+  },
+  create(body: Record<string, unknown>) {
+    return apiFetch<ProjectRecord>("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
   },
 };
 

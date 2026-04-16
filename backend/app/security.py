@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from flask import current_app, request
+from pymongo.errors import DuplicateKeyError
 
 from .db import get_db, next_public_id
 from .utils import ensure_utc, utc_now
@@ -146,21 +147,25 @@ def queue_security_alert(event_type: str, *, title: str, detail: str, metadata: 
     }
     db.security_alerts.insert_one(payload)
     for admin in db.users.find({"role": "Admin", "status": "Active"}):
-        db.notifications.insert_one(
-            {
-                "id": next_public_id("notifications", "NTF"),
-                "user_id": admin["id"],
-                "title": title,
-                "detail": detail,
-                "href": "/admin/security",
-                "document_id": None,
-                "type": "security_alert",
-                "read": False,
-                "created_at": now,
-                "read_at": None,
-                "metadata": metadata or {},
-            }
-        )
+        notification = {
+            "id": next_public_id("notifications", "NTF"),
+            "user_id": admin["id"],
+            "title": title,
+            "detail": detail,
+            "href": "/admin/security",
+            "document_id": None,
+            "source_comment_id": f"security-alert:{payload['id']}",
+            "type": "security_alert",
+            "read": False,
+            "created_at": now,
+            "read_at": None,
+            "metadata": metadata or {},
+        }
+        try:
+            db.notifications.insert_one(notification)
+        except DuplicateKeyError:
+            # A duplicate alert notification should never take down auth or request handling.
+            continue
 
 
 def session_is_stale(last_seen: Any) -> bool:

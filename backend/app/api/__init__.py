@@ -5,6 +5,7 @@ from .dashboard import dashboard_bp
 from .documents import documents_bp
 from .notifications import notifications_bp
 from .plants import plants_bp
+from .projects import projects_bp
 from .settings import settings_bp
 from .users import users_bp
 
@@ -17,6 +18,7 @@ def register_blueprints(app):
         documents_bp,
         notifications_bp,
         plants_bp,
+        projects_bp,
         analytics_bp,
         users_bp,
         settings_bp,

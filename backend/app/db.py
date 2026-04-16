@@ -34,6 +34,8 @@ def ensure_indexes():
     db.users.create_index([("assigned_plant_ids", ASCENDING)])
     db.users.create_index([("active_session_id", ASCENDING)])
     db.plants.create_index([("id", ASCENDING)], unique=True)
+    db.projects.create_index([("id", ASCENDING)], unique=True)
+    db.projects.create_index([("plant_id", ASCENDING), ("created_at", DESCENDING)])
     db.documents.create_index([("id", ASCENDING)], unique=True)
     db.documents.create_index([("plant_id", ASCENDING), ("created_at", DESCENDING)])
     db.documents.create_index([("uploaded_by_id", ASCENDING), ("created_at", DESCENDING)])

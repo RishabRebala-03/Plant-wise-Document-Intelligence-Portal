@@ -9,13 +9,13 @@ from flask import Flask
 try:
     from .auth import hash_password
     from .config import Config
-    from .db import get_db, init_db, set_sequence_value
+    from .db import get_db, init_db, next_public_id, set_sequence_value
     from .utils import utc_now
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from app.auth import hash_password
     from app.config import Config
-    from app.db import get_db, init_db, set_sequence_value
+    from app.db import get_db, init_db, next_public_id, set_sequence_value
     from app.utils import utc_now
 
 
@@ -106,6 +106,95 @@ DOCUMENTS = [
     {"id": "D009", "name": "Water Discharge Compliance", "plant_name": "Plant Gamma - Decatur", "category": "Environmental Compliance", "uploaded_by": "Sarah Miller", "uploaded_at": datetime(2026, 3, 28, tzinfo=timezone.utc), "version": 2, "upload_comment": "Revised after Q4 regulatory feedback.", "status": "Approved"},
     {"id": "D010", "name": "Heavy Equipment Check - Loader #3", "plant_name": "Plant Delta - Peoria", "category": "Equipment Inspection", "uploaded_by": "John Carter", "uploaded_at": datetime(2026, 3, 25, tzinfo=timezone.utc), "version": 1, "upload_comment": "Pre-shift equipment inspection log for Loader #3.", "status": "Draft"},
 ]
+
+
+PROJECT_TEMPLATES = [
+    {
+        "slug": "safety",
+        "name": "Safety and Compliance",
+        "code": "SAFE",
+        "description": "Audits, incidents, permits, and compliance reviews.",
+        "categories": {"Safety Report", "Environmental Compliance", "Incident Report", "Permit"},
+        "status": "Active",
+    },
+    {
+        "slug": "ops",
+        "name": "Operations Reliability",
+        "code": "OPS",
+        "description": "Inspections, logs, and maintenance workstreams.",
+        "categories": {"Equipment Inspection", "Production Log", "Maintenance Record"},
+        "status": "Active",
+    },
+    {
+        "slug": "special",
+        "name": "Strategic Initiatives",
+        "code": "STRAT",
+        "description": "Cross-functional documents and special programs.",
+        "categories": {"Other"},
+        "status": "Planned",
+    },
+]
+
+
+def _project_template_slug(category: str) -> str:
+    for template in PROJECT_TEMPLATES:
+        if category in template["categories"]:
+            return template["slug"]
+    return "special"
+
+
+def _ensure_projects_and_assignments(db, plant_rows: list[dict], *, create_missing_ids: bool) -> None:
+    project_lookup: dict[tuple[str, str], dict] = {}
+
+    for project in db.projects.find({}):
+        slug = next((template["slug"] for template in PROJECT_TEMPLATES if template["name"] == project.get("name")), None)
+        if slug:
+            project_lookup[(project["plant_id"], slug)] = project
+
+    for plant in plant_rows:
+        for index, template in enumerate(PROJECT_TEMPLATES, start=1):
+            key = (plant["id"], template["slug"])
+            if key in project_lookup:
+                continue
+            project = {
+                "id": next_public_id("projects", "PRJ") if create_missing_ids else f"PRJ{len(project_lookup) + 1:03d}",
+                "plant_id": plant["id"],
+                "plant_name": plant["name"],
+                "name": template["name"],
+                "code": f"{template['code']}-{plant['id'][-2:]}{index}",
+                "description": template["description"],
+                "owner_name": plant.get("manager_name") or "Unassigned",
+                "owner_id": None,
+                "status": template["status"],
+                "created_at": plant.get("last_upload_at") or utc_now(),
+                "updated_at": plant.get("last_upload_at") or utc_now(),
+                "due_date": None,
+                "document_ids": [],
+            }
+            db.projects.insert_one(project)
+            project_lookup[key] = project
+
+    assignments: dict[str, list[str]] = {project["id"]: [] for project in project_lookup.values()}
+    for document in db.documents.find({"deleted_at": None}):
+        project = project_lookup[(document["plant_id"], _project_template_slug(document["category"]))]
+        db.documents.update_one(
+            {"id": document["id"]},
+            {"$set": {"project_id": project["id"], "project_name": project["name"]}},
+        )
+        assignments[project["id"]].append(document["id"])
+
+    for project in project_lookup.values():
+        document_ids = assignments.get(project["id"], [])
+        db.projects.update_one(
+            {"id": project["id"]},
+            {
+                "$set": {
+                    "document_ids": document_ids,
+                    "status": "Planned" if not document_ids else project.get("status", "Active"),
+                    "updated_at": utc_now(),
+                }
+            },
+        )
 
 
 COMMENTS = {
@@ -216,6 +305,7 @@ def seed_demo_data():
             }
         )
     db.documents.insert_many(document_docs)
+    _ensure_projects_and_assignments(db, PLANTS, create_missing_ids=False)
 
     comment_docs = []
     for document_id, rows in COMMENTS.items():
@@ -258,6 +348,7 @@ def seed_demo_data():
     set_sequence_value("users", 6)
     set_sequence_value("plants", 5)
     set_sequence_value("documents", 10)
+    set_sequence_value("projects", len(PLANTS) * len(PROJECT_TEMPLATES))
     set_sequence_value("comments", 6)
     set_sequence_value("activities", 6)
     set_sequence_value("notifications", 0)
@@ -293,6 +384,12 @@ def repair_demo_users() -> None:
             },
             upsert=True,
         )
+
+    _ensure_projects_and_assignments(
+        db,
+        list(db.plants.find({}, {"_id": 0, "id": 1, "name": 1, "manager_name": 1, "last_upload_at": 1})),
+        create_missing_ids=True,
+    )
 
 
 def create_seed_app() -> Flask:

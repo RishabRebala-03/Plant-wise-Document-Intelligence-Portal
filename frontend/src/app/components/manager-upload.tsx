@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ArrowRight, Clock3, FileText, FolderKanban, Paperclip, Upload, UploadCloud } from "lucide-react";
-import { LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi } from "../lib/api";
+import { LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi, projectsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { DocumentRecord, ManagerDashboardData, Plant } from "../lib/types";
-import { assignDocumentToProject, persistPortalState, readPortalState, type ProjectRecord } from "../lib/portal";
+import type { DocumentRecord, ManagerDashboardData, Plant, ProjectRecord } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 
 function scopedPlantIds(user: { assignedPlantIds?: string[]; plantId?: string | null }) {
@@ -37,14 +36,13 @@ export function ManagerUpload() {
   const allowedPlantIds = useMemo(() => scopedPlantIds(user || {}), [user]);
 
   async function load() {
-    const [dashboard, plantsResult, documentsResult] = await Promise.all([
+    const [dashboard, plantsResult, projectsResult] = await Promise.all([
       dashboardApi.manager(),
       plantsApi.list(),
-      documentsApi.list({ page: 1, pageSize: 500 }),
+      projectsApi.list(),
     ]);
     const scopedPlants = plantsResult.items.filter((plant) => allowedPlantIds.includes(plant.id));
-    const portalState = readPortalState(plantsResult.items, documentsResult.items);
-    const scopedProjects = portalState.projects.filter((project) => allowedPlantIds.includes(project.plantId));
+    const scopedProjects = projectsResult.items.filter((project) => allowedPlantIds.includes(project.plantId));
     const scopedUploads = dashboard.recentUploads.filter((document) => allowedPlantIds.includes(document.plantId));
 
     setData({ ...dashboard, recentUploads: scopedUploads });
@@ -120,9 +118,6 @@ export function ManagerUpload() {
     setMessageType("");
     try {
       const created = await documentsApi.create(formData);
-      const latestDocuments = await documentsApi.list({ page: 1, pageSize: 500 });
-      const portalState = readPortalState(plants, latestDocuments.items);
-      persistPortalState(assignDocumentToProject(portalState, created.id, form.projectId));
       setForm({
         company: "Midwest Ltd",
         plant: allowedPlantIds[0] || "",

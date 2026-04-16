@@ -67,9 +67,8 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
+import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
-  createProject,
   defaultPortalState,
   enrichDocuments,
   formatRole,
@@ -89,10 +88,9 @@ import {
   type EnrichedDocument,
   type IpRule,
   type PortalState,
-  type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, SessionRecord, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, ProjectRecord, SessionRecord, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -105,7 +103,7 @@ type PortalContextValue = {
   portalState: PortalState;
   loading: boolean;
   refreshData: () => Promise<void>;
-  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => ProjectRecord;
+  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => Promise<ProjectRecord>;
   markDocumentLocked: (documentId: string) => void;
   setAccessRules: (rules: AccessRule[]) => Promise<void>;
   setIpRules: (rules: IpRule[]) => void;
@@ -210,16 +208,18 @@ function emptyNotifications() {
 
 function PortalProvider({ user, children }: { user: User; children: ReactNode }) {
   const [plants, setPlants] = useState<Plant[]>([]);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [rawDocuments, setRawDocuments] = useState<DocumentRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [portalState, setPortalState] = useState<PortalState>(() => defaultPortalState([], []));
+  const [portalState, setPortalState] = useState<PortalState>(() => defaultPortalState());
   const [loading, setLoading] = useState(true);
 
   async function loadAll() {
-    const [documentsResult, plantsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
+    const [documentsResult, plantsResult, projectsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
       documentsApi.list({ page: 1, pageSize: 500 }),
       plantsApi.list(),
+      projectsApi.list(),
       usersApi.list().catch(() => [] as User[]),
       notificationsApi.list().catch(() => emptyNotifications()),
       settingsApi.listAccessRules().catch(() => ({ items: [] as AccessRule[] })),
@@ -227,19 +227,17 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
 
     setRawDocuments(documentsResult.items);
     setPlants(plantsResult.items);
+    setProjects(projectsResult.items);
     setUsers(usersResult);
     setNotifications(notificationsResult.items);
     setPortalState((current) => {
-      const next = readPortalState(plantsResult.items, documentsResult.items);
-      return current.projects.length === 0 ? next : {
+      const next = readPortalState();
+      return {
         ...next,
         accessRules: accessRulesResult.items.length ? accessRulesResult.items : next.accessRules,
         ipRules: current.ipRules,
         sessionPolicy: current.sessionPolicy,
         managerDocumentLocks: current.managerDocumentLocks,
-        projects: next.projects.filter((project) => project.source === "derived").concat(
-          current.projects.filter((project) => project.source === "custom"),
-        ),
       };
     });
   }
@@ -250,7 +248,7 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     loadAll()
       .catch(() => {
         if (!active) return;
-        setPortalState(defaultPortalState([], []));
+        setPortalState(defaultPortalState());
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -270,19 +268,18 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
   }, [user.id]);
 
   useEffect(() => {
-    if (!plants.length && !rawDocuments.length) return;
     persistPortalState(portalState);
-  }, [plants.length, portalState, rawDocuments.length]);
+  }, [portalState]);
 
   useEffect(() => {
     function syncPortalState(event: StorageEvent) {
       if (event.key !== PORTAL_STATE_KEY) return;
-      setPortalState(readPortalState(plants, rawDocuments));
+      setPortalState(readPortalState());
     }
 
     window.addEventListener("storage", syncPortalState);
     return () => window.removeEventListener("storage", syncPortalState);
-  }, [plants, rawDocuments]);
+  }, []);
 
   const visiblePlantIds = useMemo(() => new Set(scopedPlantIds(user, plants)), [plants, user]);
   const scopedPlants = useMemo(
@@ -290,15 +287,15 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     [plants, visiblePlantIds],
   );
   const scopedProjects = useMemo(
-    () => portalState.projects.filter((project) => visiblePlantIds.has(project.plantId)),
-    [portalState.projects, visiblePlantIds],
+    () => projects.filter((project) => visiblePlantIds.has(project.plantId)),
+    [projects, visiblePlantIds],
   );
   const scopedRawDocuments = useMemo(
     () => rawDocuments.filter((document) => visiblePlantIds.has(document.plantId)),
     [rawDocuments, visiblePlantIds],
   );
   const documents = useMemo(() => {
-    const enriched = enrichDocuments(scopedRawDocuments, scopedProjects, user, scopedPlants, portalState.projectAssignments);
+    const enriched = enrichDocuments(scopedRawDocuments, scopedProjects, user, scopedPlants);
     return withManagerLocks(enriched, portalState, user);
   }, [portalState, scopedPlants, scopedProjects, scopedRawDocuments, user]);
 
@@ -313,14 +310,10 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     portalState,
     loading,
     refreshData: loadAll,
-    createProjectRecord: (draft) => {
-      let created: ProjectRecord | null = null;
-      setPortalState((current) => {
-        const next = createProject(current, draft);
-        created = next.projects[next.projects.length - 1];
-        return next;
-      });
-      return created!;
+    createProjectRecord: async (draft) => {
+      const created = await projectsApi.create(draft);
+      setProjects((current) => [created, ...current]);
+      return created;
     },
     markDocumentLocked: (documentId) => {
       setPortalState((current) => lockManagerDocument(current, user.id, documentId));
@@ -1131,12 +1124,12 @@ function ProjectCreatePage() {
     return <NotFoundCard title="No plant assigned" body="A manager can create a project only after an admin assigns at least one plant." />;
   }
 
-  function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedPlant) {
       return;
     }
-    const created = createProjectRecord({
+    const created = await createProjectRecord({
       plantId: selectedPlant.id,
       plantName: selectedPlant.name,
       name,

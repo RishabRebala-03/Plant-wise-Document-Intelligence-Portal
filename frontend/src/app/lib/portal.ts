@@ -1,21 +1,4 @@
-import type { DocumentRecord, Plant, User, UserRole } from "./types";
-
-export type ProjectStatus = "Active" | "At Risk" | "Planned" | "Closed";
-
-export interface ProjectRecord {
-  id: string;
-  plantId: string;
-  plantName: string;
-  name: string;
-  code: string;
-  description: string;
-  owner: string;
-  status: ProjectStatus;
-  createdAt: string;
-  dueDate: string | null;
-  documentIds: string[];
-  source: "derived" | "custom";
-}
+import type { DocumentRecord, Plant, ProjectRecord, User, UserRole } from "./types";
 
 export interface AccessRule {
   role: UserRole;
@@ -43,12 +26,10 @@ export interface SessionPolicy {
 }
 
 export interface PortalState {
-  projects: ProjectRecord[];
   accessRules: AccessRule[];
   ipRules: IpRule[];
   sessionPolicy: SessionPolicy;
   managerDocumentLocks: Record<string, string[]>;
-  projectAssignments: Record<string, string>;
 }
 
 export type AccessCapability =
@@ -67,43 +48,7 @@ export interface EnrichedDocument extends DocumentRecord {
   accessLocked: boolean;
 }
 
-type LocalProjectDraft = Omit<ProjectRecord, "source">;
-
 export const PORTAL_STATE_KEY = "midwest.portalState";
-
-const PROJECT_TEMPLATES: Array<{
-  id: string;
-  name: string;
-  code: string;
-  description: string;
-  categories: string[];
-  status: ProjectStatus;
-}> = [
-  {
-    id: "safety",
-    name: "Safety and Compliance",
-    code: "SAFE",
-    description: "Audits, incidents, permits, and compliance reviews.",
-    categories: ["Safety Report", "Environmental Compliance", "Incident Report", "Permit"],
-    status: "Active",
-  },
-  {
-    id: "ops",
-    name: "Operations Reliability",
-    code: "OPS",
-    description: "Inspections, logs, and maintenance workstreams.",
-    categories: ["Equipment Inspection", "Production Log", "Maintenance Record"],
-    status: "Active",
-  },
-  {
-    id: "special",
-    name: "Strategic Initiatives",
-    code: "STRAT",
-    description: "Cross-functional documents and special programs.",
-    categories: ["Other"],
-    status: "Planned",
-  },
-];
 
 const DEFAULT_ACCESS_RULES: AccessRule[] = [
   {
@@ -151,55 +96,17 @@ const DEFAULT_SESSION_POLICY: SessionPolicy = {
   enforceSingleSession: true,
 };
 
-function buildDefaultProjects(plants: Plant[], documents: DocumentRecord[]): ProjectRecord[] {
-  const projects: ProjectRecord[] = [];
-
-  plants.forEach((plant) => {
-    PROJECT_TEMPLATES.forEach((template, index) => {
-      const projectId = `${plant.id}-${template.id}`;
-      const assignedDocs = documents
-        .filter((document) => document.plantId === plant.id)
-        .filter((document) => template.categories.includes(document.category) || (template.id === "special" && !PROJECT_TEMPLATES[0].categories.concat(PROJECT_TEMPLATES[1].categories).includes(document.category)))
-        .map((document) => document.id);
-
-      const owner =
-        plant.manager ||
-        documents.find((document) => document.plantId === plant.id)?.uploadedBy ||
-        "Unassigned";
-
-      projects.push({
-        id: projectId,
-        plantId: plant.id,
-        plantName: plant.name,
-        name: template.name,
-        code: `${template.code}-${plant.id.slice(-2)}${index + 1}`,
-        description: template.description,
-        owner,
-        status: assignedDocs.length === 0 ? "Planned" : template.status,
-        createdAt: plant.lastUpload || "2026-01-01",
-        dueDate: null,
-        documentIds: assignedDocs,
-        source: "derived",
-      });
-    });
-  });
-
-  return projects;
-}
-
-export function defaultPortalState(plants: Plant[], documents: DocumentRecord[]): PortalState {
+export function defaultPortalState(): PortalState {
   return {
-    projects: buildDefaultProjects(plants, documents),
     accessRules: DEFAULT_ACCESS_RULES,
     ipRules: DEFAULT_IP_RULES,
     sessionPolicy: DEFAULT_SESSION_POLICY,
     managerDocumentLocks: {},
-    projectAssignments: {},
   };
 }
 
-export function readPortalState(plants: Plant[], documents: DocumentRecord[]): PortalState {
-  const fallback = defaultPortalState(plants, documents);
+export function readPortalState(): PortalState {
+  const fallback = defaultPortalState();
   const raw = window.localStorage.getItem(PORTAL_STATE_KEY);
   if (!raw) return fallback;
 
@@ -208,18 +115,10 @@ export function readPortalState(plants: Plant[], documents: DocumentRecord[]): P
     return {
       ...fallback,
       ...parsed,
-      projects: [
-        ...buildDefaultProjects(plants, documents),
-        ...((parsed.projects || []) as LocalProjectDraft[]).map((project) => ({
-          ...project,
-          source: "custom" as const,
-        })),
-      ],
       accessRules: parsed.accessRules || fallback.accessRules,
       ipRules: parsed.ipRules || fallback.ipRules,
       sessionPolicy: parsed.sessionPolicy || fallback.sessionPolicy,
       managerDocumentLocks: parsed.managerDocumentLocks || {},
-      projectAssignments: parsed.projectAssignments || {},
     };
   } catch {
     return fallback;
@@ -227,30 +126,7 @@ export function readPortalState(plants: Plant[], documents: DocumentRecord[]): P
 }
 
 export function persistPortalState(state: PortalState) {
-  const payload: PortalState = {
-    ...state,
-    projects: state.projects.filter((project) => project.source === "custom"),
-  };
-  window.localStorage.setItem(PORTAL_STATE_KEY, JSON.stringify(payload));
-}
-
-export function createProject(
-  state: PortalState,
-  draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">,
-) {
-  const project: ProjectRecord = {
-    id: `custom-${Math.random().toString(36).slice(2, 9)}`,
-    ...draft,
-    createdAt: new Date().toISOString().slice(0, 10),
-    status: "Active",
-    documentIds: [],
-    source: "custom",
-  };
-
-  return {
-    ...state,
-    projects: [...state.projects, project],
-  };
+  window.localStorage.setItem(PORTAL_STATE_KEY, JSON.stringify(state));
 }
 
 export function updateAccessRules(state: PortalState, accessRules: AccessRule[]) {
@@ -282,26 +158,6 @@ export function updateSessionPolicy(state: PortalState, sessionPolicy: SessionPo
   };
 }
 
-export function assignDocumentToProject(state: PortalState, documentId: string, projectId: string) {
-  const projects = state.projects.map((project) => {
-    const isTarget = project.id === projectId;
-    const nextDocumentIds = project.documentIds.filter((id) => id !== documentId);
-    return {
-      ...project,
-      documentIds: isTarget ? [...nextDocumentIds, documentId] : nextDocumentIds,
-    };
-  });
-
-  return {
-    ...state,
-    projects,
-    projectAssignments: {
-      ...state.projectAssignments,
-      [documentId]: projectId,
-    },
-  };
-}
-
 export function lockManagerDocument(state: PortalState, managerId: string, documentId: string) {
   const existing = state.managerDocumentLocks[managerId] || [];
   if (existing.includes(documentId)) return state;
@@ -320,7 +176,6 @@ export function enrichDocuments(
   projects: ProjectRecord[],
   currentUser: User | null,
   plants: Plant[],
-  projectAssignments: Record<string, string> = {},
   filters?: {
     plantId?: string;
     projectId?: string;
@@ -332,27 +187,24 @@ export function enrichDocuments(
   },
 ) {
   const allowedPlantIds =
-    currentUser?.role === "Mining Manager" && currentUser.plantId
-      ? new Set([currentUser.plantId])
+    currentUser?.role === "Mining Manager" && (currentUser.assignedPlantIds?.length || currentUser.plantId)
+      ? new Set(currentUser.assignedPlantIds?.length ? currentUser.assignedPlantIds : currentUser.plantId ? [currentUser.plantId] : [])
       : new Set(plants.map((plant) => plant.id));
 
   const enriched: EnrichedDocument[] = documents
     .filter((document) => allowedPlantIds.has(document.plantId))
     .map((document) => {
-      const assignedProjectId = projectAssignments[document.id];
       const project =
-        projects.find((candidate) => candidate.id === assignedProjectId) ||
-        projects.find((candidate) => candidate.documentIds.includes(document.id)) ||
-        projects.find((candidate) => candidate.plantId === document.plantId) || {
-          id: "unassigned",
-          name: "Unassigned",
+        (document.projectId ? projects.find((candidate) => candidate.id === document.projectId) : undefined) || {
+          id: document.projectId || "unassigned",
+          name: document.projectName || "Unassigned",
           owner: document.uploadedBy,
         };
 
       return {
         ...document,
-        projectId: project.id,
-        projectName: project.name,
+        projectId: document.projectId || project.id,
+        projectName: document.projectName || project.name,
         managerName: project.owner,
         identifier: `${document.plantId}-${document.id}`,
         accessLocked: false,
