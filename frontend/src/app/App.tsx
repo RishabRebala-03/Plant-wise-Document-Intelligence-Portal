@@ -68,6 +68,7 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { DocumentDrawer } from "./components/document-drawer";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
@@ -3529,6 +3530,7 @@ function AdminNetworkPage() {
 function AdminSessionsPage() {
   const { portalState, setSessionPolicyValue } = usePortal();
   const policy = portalState.sessionPolicy;
+  const [activeTab, setActiveTab] = useState("session-policies");
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [outsideHoursSessions, setOutsideHoursSessions] = useState<SessionRecord[]>([]);
   const [outsideHoursAttempts, setOutsideHoursAttempts] = useState<OutsideHoursAttempt[]>([]);
@@ -3561,33 +3563,111 @@ function AdminSessionsPage() {
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Sessions" }]} />
-      <SectionCard title="Session policies" subtitle="Auto logout and session conflict behavior">
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="space-y-2 text-sm">
-            <span className="font-medium text-slate-700">Auto logout minutes</span>
-            <input
-              type="number"
-              min={2}
-              max={120}
-              value={policy.autoLogoutMinutes}
-              onChange={(event) => setSessionPolicyValue({ ...policy, autoLogoutMinutes: Math.max(2, Number(event.target.value) || 2) })}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-            />
-          </label>
-          <label className="space-y-2 text-sm">
-            <span className="font-medium text-slate-700">Conflict mode</span>
-            <select
-              value={policy.conflictMode}
-              onChange={(event) => setSessionPolicyValue({ ...policy, conflictMode: event.target.value as SessionPolicy["conflictMode"] })}
-              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-            >
-              <option value="warn">Warn user</option>
-              <option value="block">Block previous session</option>
-            </select>
-          </label>
-          <AccessToggle label="Enforce single active session" checked={policy.enforceSingleSession} onChange={(checked) => setSessionPolicyValue({ ...policy, enforceSingleSession: checked })} />
-        </div>
-      </SectionCard>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <SectionCard
+          title="Admin session controls"
+          subtitle="Switch between general session policy settings and outside-hours monitoring without leaving this page"
+          action={(
+            <TabsList className="grid w-full max-w-[460px] grid-cols-2 rounded-2xl bg-slate-100 p-1">
+              <TabsTrigger value="session-policies" className="rounded-xl text-sm">
+                Session policies
+              </TabsTrigger>
+              <TabsTrigger value="outside-business-hours" className="rounded-xl text-sm">
+                Outside business hours
+              </TabsTrigger>
+            </TabsList>
+          )}
+        >
+          <TabsContent value="session-policies" className="mt-0">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Auto logout minutes</span>
+                <input
+                  type="number"
+                  min={2}
+                  max={120}
+                  value={policy.autoLogoutMinutes}
+                  onChange={(event) => setSessionPolicyValue({ ...policy, autoLogoutMinutes: Math.max(2, Number(event.target.value) || 2) })}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Conflict mode</span>
+                <select
+                  value={policy.conflictMode}
+                  onChange={(event) => setSessionPolicyValue({ ...policy, conflictMode: event.target.value as SessionPolicy["conflictMode"] })}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                >
+                  <option value="warn">Warn user</option>
+                  <option value="block">Block previous session</option>
+                </select>
+              </label>
+              <AccessToggle label="Enforce single active session" checked={policy.enforceSingleSession} onChange={(checked) => setSessionPolicyValue({ ...policy, enforceSingleSession: checked })} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="outside-business-hours" className="mt-0">
+            {loadingSessions ? <div className="text-sm text-slate-500">Flagging outside-hours activity...</div> : null}
+            {!loadingSessions && !sessionError ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <MetricCard label="Off-hours sessions" value={outsideHoursSessions.length} hint="Actual session records that started outside business hours." icon={Clock3} tone="amber" />
+                  <MetricCard label="Blocked attempts" value={outsideHoursAttempts.length} hint="Off-hours sign-ins blocked before a session was established." icon={TriangleAlert} tone="rose" />
+                  <MetricCard label="Observed people" value={new Set([...outsideHoursSessions.map((item) => item.userId), ...outsideHoursAttempts.map((item) => item.userId || item.userName)]).size} hint="Distinct identities involved in off-hours access." icon={Users} tone="blue" />
+                  <MetricCard label="Observed IPs" value={new Set([...outsideHoursSessions.map((item) => item.clientIp), ...outsideHoursAttempts.map((item) => item.clientIp)]).size} hint="Network origins tied to outside-hours access." icon={Network} tone="teal" />
+                </div>
+
+                <div className="mt-6 grid gap-6 xl:grid-cols-2">
+                  <div className="space-y-4">
+                    <div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div>
+                    {outsideHoursSessions.map((session) => (
+                      <div key={`outside-session-${session.sessionId}`} className="rounded-[28px] border border-amber-200 bg-amber-50/60 p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
+                            <div className="mt-1 text-sm text-slate-500">{session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}</div>
+                          </div>
+                          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">Flagged</div>
+                        </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div></div>
+                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div></div>
+                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</div><div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div></div>
+                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device / browser</div><div className="mt-2 text-sm text-slate-900">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div><div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div></div>
+                        </div>
+                      </div>
+                    ))}
+                    {!outsideHoursSessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records currently fall outside business hours.</div> : null}
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div>
+                    {outsideHoursAttempts.map((attempt) => (
+                      <div key={`outside-attempt-${attempt.id}`} className="rounded-[28px] border border-rose-200 bg-rose-50/60 p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-lg font-semibold text-slate-950">{attempt.userName || "Unknown user"}</div>
+                            <div className="mt-1 text-sm text-slate-500">{attempt.userRole || "Unknown role"}</div>
+                          </div>
+                          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-800">Blocked</div>
+                        </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{attempt.clientIp}</div></div>
+                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Attempt time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(attempt.occurredAt)}</div></div>
+                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device</div><div className="mt-2 text-sm text-slate-900">{attempt.device || "Unknown device"}</div></div>
+                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Browser</div><div className="mt-2 text-sm text-slate-900">{attempt.browser || "Unknown browser"}</div></div>
+                        </div>
+                        <div className="mt-3 text-xs text-slate-500 break-all">{attempt.userAgent || "User agent not available"}</div>
+                      </div>
+                    ))}
+                    {!outsideHoursAttempts.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No blocked outside-hours attempts have been captured yet.</div> : null}
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </TabsContent>
+        </SectionCard>
+      </Tabs>
 
       <SectionCard title="Live session monitor" subtitle="Detailed session visibility across logins, active presence, and exits">
         {loadingSessions ? <div className="text-sm text-slate-500">Loading session inventory...</div> : null}
@@ -3658,67 +3738,6 @@ function AdminSessionsPage() {
                 </div>
               ))}
               {!sessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records are available yet.</div> : null}
-            </div>
-          </>
-        ) : null}
-      </SectionCard>
-
-      <SectionCard title="Outside business hours logins" subtitle="Mining-manager sessions or blocked attempts that fell outside the configured business window">
-        {loadingSessions ? <div className="text-sm text-slate-500">Flagging outside-hours activity...</div> : null}
-        {!loadingSessions && !sessionError ? (
-          <>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard label="Off-hours sessions" value={outsideHoursSessions.length} hint="Actual session records that started outside business hours." icon={Clock3} tone="amber" />
-              <MetricCard label="Blocked attempts" value={outsideHoursAttempts.length} hint="Off-hours sign-ins blocked before a session was established." icon={TriangleAlert} tone="rose" />
-              <MetricCard label="Observed people" value={new Set([...outsideHoursSessions.map((item) => item.userId), ...outsideHoursAttempts.map((item) => item.userId || item.userName)]).size} hint="Distinct identities involved in off-hours access." icon={Users} tone="blue" />
-              <MetricCard label="Observed IPs" value={new Set([...outsideHoursSessions.map((item) => item.clientIp), ...outsideHoursAttempts.map((item) => item.clientIp)]).size} hint="Network origins tied to outside-hours access." icon={Network} tone="teal" />
-            </div>
-
-            <div className="mt-6 grid gap-6 xl:grid-cols-2">
-              <div className="space-y-4">
-                <div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div>
-                {outsideHoursSessions.map((session) => (
-                  <div key={`outside-session-${session.sessionId}`} className="rounded-[28px] border border-amber-200 bg-amber-50/60 p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
-                        <div className="mt-1 text-sm text-slate-500">{session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}</div>
-                      </div>
-                      <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">Flagged</div>
-                    </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div></div>
-                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div></div>
-                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</div><div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div></div>
-                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device / browser</div><div className="mt-2 text-sm text-slate-900">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div><div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div></div>
-                    </div>
-                  </div>
-                ))}
-                {!outsideHoursSessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records currently fall outside business hours.</div> : null}
-              </div>
-
-              <div className="space-y-4">
-                <div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div>
-                {outsideHoursAttempts.map((attempt) => (
-                  <div key={`outside-attempt-${attempt.id}`} className="rounded-[28px] border border-rose-200 bg-rose-50/60 p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-lg font-semibold text-slate-950">{attempt.userName || "Unknown user"}</div>
-                        <div className="mt-1 text-sm text-slate-500">{attempt.userRole || "Unknown role"}</div>
-                      </div>
-                      <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-800">Blocked</div>
-                    </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{attempt.clientIp}</div></div>
-                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Attempt time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(attempt.occurredAt)}</div></div>
-                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device</div><div className="mt-2 text-sm text-slate-900">{attempt.device || "Unknown device"}</div></div>
-                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Browser</div><div className="mt-2 text-sm text-slate-900">{attempt.browser || "Unknown browser"}</div></div>
-                    </div>
-                    <div className="mt-3 text-xs text-slate-500 break-all">{attempt.userAgent || "User agent not available"}</div>
-                  </div>
-                ))}
-                {!outsideHoursAttempts.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No blocked outside-hours attempts have been captured yet.</div> : null}
-              </div>
             </div>
           </>
         ) : null}
