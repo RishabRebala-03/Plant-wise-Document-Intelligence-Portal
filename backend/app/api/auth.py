@@ -9,7 +9,7 @@ from ..auth import issue_tokens, register_active_session, require_auth, revoke_r
 from ..db import get_db
 from ..security import evaluate_ip_rules, get_client_ip, is_business_hours_allowed, queue_security_alert, record_audit_event
 from ..serializers import serialize_user
-from ..utils import error_response, parse_json_body, success_response, utc_now
+from ..utils import ensure_utc, error_response, parse_json_body, success_response, utc_now
 
 
 auth_bp = Blueprint("auth", __name__)
@@ -76,7 +76,7 @@ def login():
             metadata={"reason": "user_disabled"},
         )
         return error_response("User is disabled", 403)
-    lock_until = user.get("security", {}).get("lock_until")
+    lock_until = ensure_utc(user.get("security", {}).get("lock_until"))
     if lock_until and utc_now() < lock_until:
         record_audit_event(
             "Login Rejected",

@@ -136,6 +136,41 @@ ACTIVITIES = [
 ]
 
 
+def _build_demo_user_doc(user: dict, plant_by_name: dict[str, dict], password_hash: str, now: datetime) -> dict:
+    first_name, last_name = user["name"].split(" ", 1)
+    plant = plant_by_name.get(user["plant_name"])
+    assigned_plants = [plant_by_name[name] for name in user.get("assigned_plants", []) if name in plant_by_name]
+    return {
+        **user,
+        "first_name": first_name,
+        "last_name": last_name,
+        "plant_id": plant["id"] if plant else None,
+        "assigned_plant_ids": [plant["id"] for plant in assigned_plants],
+        "assigned_plant_names": [plant["name"] for plant in assigned_plants],
+        "password_hash": password_hash,
+        "notification_preferences": {
+            "new_document_upload": True,
+            "document_approval": True,
+            "weekly_summary_report": False,
+            "system_alerts": True,
+            "ceo_note_added": user["role"] == "Mining Manager",
+        },
+        "display_preferences": {
+            "table_density": "Default",
+            "language": "English (US)",
+            "date_format": "YYYY-MM-DD",
+        },
+        "security": {
+            "two_factor_enabled": False,
+            "last_password_change_at": now,
+            "failed_login_attempts": 0,
+            "lock_until": None,
+        },
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
 def seed_demo_data():
     db = get_db()
     if db.users.count_documents({}) > 0:
@@ -148,40 +183,11 @@ def seed_demo_data():
     password_hash = hash_password(Config.DEFAULT_DEMO_PASSWORD)
     user_docs = []
     for user in USERS:
-        first_name, last_name = user["name"].split(" ", 1)
-        plant = plant_by_name.get(user["plant_name"])
-        assigned_plants = [plant_by_name[name] for name in user.get("assigned_plants", []) if name in plant_by_name]
         user_docs.append(
             {
-                **user,
-                "first_name": first_name,
-                "last_name": last_name,
-                "plant_id": plant["id"] if plant else None,
-                "assigned_plant_ids": [plant["id"] for plant in assigned_plants],
-                "assigned_plant_names": [plant["name"] for plant in assigned_plants],
-                "password_hash": password_hash,
-                "notification_preferences": {
-                    "new_document_upload": True,
-                    "document_approval": True,
-                    "weekly_summary_report": False,
-                    "system_alerts": True,
-                    "ceo_note_added": user["role"] == "Mining Manager",
-                },
-                "display_preferences": {
-                    "table_density": "Default",
-                    "language": "English (US)",
-                    "date_format": "YYYY-MM-DD",
-                },
-                "security": {
-                    "two_factor_enabled": False,
-                    "last_password_change_at": now,
-                    "failed_login_attempts": 0,
-                    "lock_until": None,
-                },
+                **_build_demo_user_doc(user, plant_by_name, password_hash, now),
                 "active_session_id": None,
                 "session_started_at": None,
-                "created_at": now,
-                "updated_at": now,
             }
         )
     db.users.insert_many(user_docs)
@@ -258,6 +264,35 @@ def seed_demo_data():
     set_sequence_value("ip_rules", len(IP_RULES))
     set_sequence_value("audit_logs", 0)
     set_sequence_value("security_alerts", 0)
+
+
+def repair_demo_users() -> None:
+    db = get_db()
+    now = utc_now()
+    password_hash = hash_password(Config.DEFAULT_DEMO_PASSWORD)
+    plant_by_name = {plant["name"]: plant for plant in db.plants.find({}, {"_id": 0, "id": 1, "name": 1, "company": 1})}
+
+    if len(plant_by_name) < len(PLANTS):
+        missing_names = [plant["name"] for plant in PLANTS if plant["name"] not in plant_by_name]
+        if missing_names:
+            db.plants.insert_many([plant for plant in PLANTS if plant["name"] in missing_names])
+        plant_by_name = {plant["name"]: plant for plant in db.plants.find({}, {"_id": 0, "id": 1, "name": 1, "company": 1})}
+
+    for user in USERS:
+        demo_user = _build_demo_user_doc(user, plant_by_name, password_hash, now)
+        existing = db.users.find_one({"id": user["id"]}, {"_id": 0, "created_at": 1, "active_session_id": 1, "session_started_at": 1})
+        db.users.update_one(
+            {"id": user["id"]},
+            {
+                "$set": {
+                    **demo_user,
+                    "active_session_id": existing.get("active_session_id") if existing else None,
+                    "session_started_at": existing.get("session_started_at") if existing else None,
+                    "created_at": existing.get("created_at", now) if existing else now,
+                }
+            },
+            upsert=True,
+        )
 
 
 def create_seed_app() -> Flask:
