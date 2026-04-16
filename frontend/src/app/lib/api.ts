@@ -7,6 +7,7 @@ import type {
   ManagerDashboardData,
   NotificationItem,
   Plant,
+  SessionRecord,
   User,
 } from "./types";
 
@@ -373,6 +374,9 @@ export const settingsApi = {
   },
   listIpRules() {
     return apiFetch<{ items: Array<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }> }>("/settings/ip-rules");
+  },
+  listSessions() {
+    return apiFetch<{ items: SessionRecord[] }>("/settings/sessions");
   },
   listAccessRules() {
     return apiFetch<{

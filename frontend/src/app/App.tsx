@@ -67,7 +67,7 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
+import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, settingsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -92,7 +92,7 @@ import {
   type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, SessionRecord, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -1108,36 +1108,74 @@ function ProjectCreatePage() {
   const { user, plants, createProjectRecord } = usePortal();
   const { can } = useRoleAccess();
   const navigate = useNavigate();
-  const plant = plants.find((item) => item.id === plantId);
+  const managerPlantIds = assignedPlantIds(user);
+  const managerPlants = plants.filter((item) => managerPlantIds.includes(item.id));
+  const [selectedPlantId, setSelectedPlantId] = useState(managerPlantIds.includes(plantId || "") ? plantId || "" : "");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
 
-  if (user.role !== "Mining Manager" || !assignedPlantIds(user).includes(plantId || "") || !can("canCreateProjects")) {
+  useEffect(() => {
+    if (managerPlantIds.includes(plantId || "")) {
+      setSelectedPlantId(plantId || "");
+    }
+  }, [managerPlantIds, plantId]);
+
+  const selectedPlant = managerPlants.find((item) => item.id === selectedPlantId);
+
+  if (user.role !== "Mining Manager" || !can("canCreateProjects")) {
     return <Navigate to={defaultHome(user.role)} replace />;
   }
-  if (!plant) return <NotFoundCard title="Plant not found" body="A project can only be created inside a valid plant workspace." />;
+  if (!managerPlants.length) {
+    return <NotFoundCard title="No plant assigned" body="A manager can create a project only after an admin assigns at least one plant." />;
+  }
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (!selectedPlant) {
+      return;
+    }
     const created = createProjectRecord({
-      plantId: plant.id,
-      plantName: plant.name,
+      plantId: selectedPlant.id,
+      plantName: selectedPlant.name,
       name,
       code: code || name.slice(0, 6).toUpperCase().replace(/\s+/g, ""),
       description,
       owner: user.name,
       dueDate: dueDate || null,
     });
-    navigate(`/plants/${plant.id}/projects/${created.id}/documents`);
+    navigate(`/plants/${selectedPlant.id}/projects/${created.id}/documents`);
   }
 
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Plants", to: "/plants" }, { label: plant.name, to: `/plants/${plant.id}` }, { label: "Create Project" }]} />
+      <Breadcrumbs
+        items={[
+          { label: "Plants", to: "/plants" },
+          ...(selectedPlant ? [{ label: selectedPlant.name, to: `/plants/${selectedPlant.id}` }] : []),
+          { label: "Create Project" },
+        ]}
+      />
       <SectionCard title="Create project" subtitle="Managers can create project spaces within their assigned plant">
         <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">Plant</span>
+            <select
+              value={selectedPlantId}
+              onChange={(event) => setSelectedPlantId(event.target.value)}
+              required
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+            >
+              <option value="">Select plant</option>
+              {managerPlants.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <div className="text-xs text-slate-500">Select the plant first. The project will be created only inside that assigned plant workspace.</div>
+          </label>
           <label className="space-y-2 text-sm">
             <span className="font-medium text-slate-700">Project name</span>
             <input value={name} onChange={(event) => setName(event.target.value)} required className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
@@ -1155,7 +1193,7 @@ function ProjectCreatePage() {
             <input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
           </label>
           <div className="flex items-end justify-end">
-            <button type="submit" className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            <button type="submit" disabled={!selectedPlantId} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
               Create and open documents
             </button>
           </div>
@@ -2557,6 +2595,16 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function formatDuration(seconds?: number) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+}
+
 function loginIp(activity: Activity) {
   const raw = activity.metadata?.clientIp;
   return typeof raw === "string" && raw.trim() ? raw : "Unknown IP";
@@ -2867,6 +2915,30 @@ function AdminNetworkPage() {
 function AdminSessionsPage() {
   const { portalState, setSessionPolicyValue } = usePortal();
   const policy = portalState.sessionPolicy;
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+  const [sessionError, setSessionError] = useState("");
+
+  useEffect(() => {
+    settingsApi
+      .listSessions()
+      .then((result) => {
+        setSessions(result.items);
+        setSessionError("");
+      })
+      .catch((error) => {
+        if (error instanceof ApiError && error.status === 404) {
+          setSessionError("Session monitoring is not available from the backend yet. Restart the backend server to load the new admin sessions route.");
+          return;
+        }
+        setSessionError(error instanceof Error ? error.message : "Unable to load sessions.");
+      })
+      .finally(() => setLoadingSessions(false));
+  }, []);
+
+  const activeSessions = sessions.filter((session) => session.status === "Active");
+  const endedSessions = sessions.filter((session) => session.status === "Ended");
+  const uniqueIps = new Set(sessions.map((session) => session.clientIp)).size;
 
   return (
     <div className="space-y-6">
@@ -2897,6 +2969,79 @@ function AdminSessionsPage() {
           </label>
           <AccessToggle label="Enforce single active session" checked={policy.enforceSingleSession} onChange={(checked) => setSessionPolicyValue({ ...policy, enforceSingleSession: checked })} />
         </div>
+      </SectionCard>
+
+      <SectionCard title="Live session monitor" subtitle="Detailed session visibility across logins, active presence, and exits">
+        {loadingSessions ? <div className="text-sm text-slate-500">Loading session inventory...</div> : null}
+        {!loadingSessions && sessionError ? <div className="text-sm text-[#BB0000]">{sessionError}</div> : null}
+        {!loadingSessions && !sessionError ? (
+          <>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Total sessions" value={sessions.length} hint="All active and ended sessions captured by the platform." icon={Clock3} />
+              <MetricCard label="Active now" value={activeSessions.length} hint="Sessions currently open and not revoked." icon={ShieldCheck} tone="blue" />
+              <MetricCard label="Ended" value={endedSessions.length} hint="Sessions closed by logout, replacement, or policy action." icon={Lock} tone="rose" />
+              <MetricCard label="Observed IPs" value={uniqueIps} hint="Distinct network origins across the current session inventory." icon={Network} tone="amber" />
+            </div>
+
+            <div className="mt-6 space-y-4">
+              {sessions.map((session) => (
+                <div key={session.sessionId} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_14px_32px_rgba(15,23,42,0.05)]">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}
+                      </div>
+                    </div>
+                    <div className={`rounded-full px-3 py-1 text-xs font-medium ${session.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                      {session.status}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP address</div>
+                      <div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div>
+                      <div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Logout time</div>
+                      <div className="mt-2 text-sm text-slate-900">{session.endedAt ? formatDateTime(session.endedAt) : "Still active"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Session duration</div>
+                      <div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Last seen</div>
+                      <div className="mt-2 text-sm text-slate-900">{formatDateTime(session.lastSeenAt)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Idle time</div>
+                      <div className="mt-2 text-sm text-slate-900">{session.status === "Active" ? formatDuration(session.idleSeconds) : "-"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:col-span-2">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Close reason / device</div>
+                      <div className="mt-2 text-sm text-slate-900">
+                        {session.revokedReason ? `Ended because ${session.revokedReason.replace(/_/g, " ")}.` : "No forced close reason recorded."}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 text-xs text-slate-400">Session ID: {session.sessionId}</div>
+                </div>
+              ))}
+              {!sessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records are available yet.</div> : null}
+            </div>
+          </>
+        ) : null}
       </SectionCard>
     </div>
   );

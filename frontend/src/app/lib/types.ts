@@ -98,6 +98,23 @@ export interface NotificationItem {
   readAt?: string | null;
 }
 
+export interface SessionRecord {
+  sessionId: string;
+  userId: string;
+  userName?: string | null;
+  userEmail?: string | null;
+  userRole?: string | null;
+  clientIp: string;
+  userAgent?: string | null;
+  startedAt: string | null;
+  lastSeenAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number;
+  idleSeconds: number;
+  status: "Active" | "Ended";
+  revokedReason?: string | null;
+}
+
 export interface Plant {
   id: string;
   name: string;

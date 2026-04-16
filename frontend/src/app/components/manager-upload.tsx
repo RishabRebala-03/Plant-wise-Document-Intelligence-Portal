@@ -266,7 +266,13 @@ export function ManagerUpload() {
           <form onSubmit={handleUpload} className="grid gap-4 md:grid-cols-2">
             <label className="space-y-2 text-sm">
               <span className="font-medium text-slate-700">Company</span>
-              <input value={form.company} onChange={(event) => setForm({ ...form, company: event.target.value })} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              <input
+                value={form.company}
+                readOnly
+                aria-readonly="true"
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 text-slate-600 outline-none"
+              />
+              <div className="text-xs text-slate-500">Company context is fixed by the portal and cannot be changed during upload.</div>
             </label>
             <label className="space-y-2 text-sm">
               <span className="font-medium text-slate-700">Plant</span>

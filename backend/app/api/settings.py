@@ -9,7 +9,7 @@ from ..db import get_db, next_public_id
 from ..permissions import DEFAULT_ACCESS_RULES, get_access_rules, save_access_rules
 from ..security import record_audit_event
 from ..serializers import serialize_user
-from ..utils import error_response, parse_json_body, success_response, utc_now
+from ..utils import ensure_utc, error_response, parse_json_body, success_response, to_iso, utc_now
 
 
 settings_bp = Blueprint("settings", __name__)
@@ -63,6 +63,31 @@ def _serialize_access_rule(rule: dict) -> dict:
         "canDeleteDocuments": bool(rule.get("canDeleteDocuments")),
         "canManageUsers": bool(rule.get("canManageUsers")),
         "canConfigureIp": bool(rule.get("canConfigureIp")),
+    }
+
+
+def _serialize_session(session: dict, user: dict | None = None) -> dict:
+    started_at = ensure_utc(session.get("created_at"))
+    last_seen_at = ensure_utc(session.get("last_seen_at"))
+    revoked_at = ensure_utc(session.get("revoked_at"))
+    ended_at = revoked_at or last_seen_at
+    duration_seconds = int(max(0, (ended_at - started_at).total_seconds())) if started_at and ended_at else 0
+    idle_seconds = int(max(0, (utc_now() - last_seen_at).total_seconds())) if last_seen_at and not revoked_at else 0
+    return {
+        "sessionId": session.get("session_id"),
+        "userId": session.get("user_id"),
+        "userName": user.get("name") if user else None,
+        "userEmail": user.get("email") if user else None,
+        "userRole": user.get("role") if user else None,
+        "clientIp": session.get("client_ip") or "unknown",
+        "userAgent": session.get("user_agent") or "",
+        "startedAt": to_iso(started_at),
+        "lastSeenAt": to_iso(last_seen_at),
+        "endedAt": to_iso(revoked_at),
+        "durationSeconds": duration_seconds,
+        "idleSeconds": idle_seconds,
+        "status": "Active" if not revoked_at else "Ended",
+        "revokedReason": session.get("revoked_reason"),
     }
 
 
@@ -261,3 +286,14 @@ def update_ip_rule(rule_id: str):
     _record_settings_activity("IP Rule Updated", current_user(), ruleId=rule_id, updatedFields=sorted(updates.keys()), address=updated.get("address"), status=updated.get("status"))
     record_audit_event("IP Rule Updated", user=current_user(), resource_type="ip_rule", resource_id=rule_id, metadata={"updatedFields": sorted(updates.keys())})
     return success_response(_serialize_ip_rule(updated))
+
+
+@settings_bp.get("/settings/sessions")
+@require_auth(["Admin"])
+def list_sessions():
+    db = get_db()
+    sessions = []
+    for session in db.active_sessions.find({}).sort("created_at", -1).limit(250):
+        user = db.users.find_one({"id": session.get("user_id")})
+        sessions.append(_serialize_session(session, user))
+    return success_response({"items": sessions})
