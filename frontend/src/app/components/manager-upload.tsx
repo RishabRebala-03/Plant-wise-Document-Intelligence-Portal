@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ArrowRight, Clock3, FileText, FolderKanban, Paperclip, Upload, UploadCloud } from "lucide-react";
-import { LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi, projectsApi } from "../lib/api";
+import { ApiError, LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi, settingsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { DocumentRecord, ManagerDashboardData, Plant, ProjectRecord } from "../lib/types";
+import type { DocumentRecord, GovernancePolicy, ManagerDashboardData, Plant } from "../lib/types";
+import { assignDocumentToProject, persistPortalState, readPortalState, type ProjectRecord } from "../lib/portal";
 import { DocumentDrawer } from "./document-drawer";
 
 function scopedPlantIds(user: { assignedPlantIds?: string[]; plantId?: string | null }) {
@@ -24,6 +25,15 @@ export function ManagerUpload() {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
   const [file, setFile] = useState<File | null>(null);
+  const [governancePolicy, setGovernancePolicy] = useState<GovernancePolicy>({
+    allowedUploadFormats: ["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"],
+    businessHours: {
+      timezone: "Asia/Kolkata",
+      startHour: 7,
+      endHour: 20,
+      allowedDays: [0, 1, 2, 3, 4],
+    },
+  });
   const [form, setForm] = useState({
     company: "Midwest Ltd",
     plant: user?.plantId || "",
@@ -36,18 +46,26 @@ export function ManagerUpload() {
   const allowedPlantIds = useMemo(() => scopedPlantIds(user || {}), [user]);
 
   async function load() {
-    const [dashboard, plantsResult, projectsResult] = await Promise.all([
+    const [dashboard, plantsResult, documentsResult, governanceResult] = await Promise.all([
       dashboardApi.manager(),
       plantsApi.list(),
-      projectsApi.list(),
+      documentsApi.list({ page: 1, pageSize: 500 }),
+      settingsApi.getGovernancePolicy().catch((error) => {
+        if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+          return governancePolicy;
+        }
+        throw error;
+      }),
     ]);
     const scopedPlants = plantsResult.items.filter((plant) => allowedPlantIds.includes(plant.id));
-    const scopedProjects = projectsResult.items.filter((project) => allowedPlantIds.includes(project.plantId));
+    const portalState = readPortalState(plantsResult.items, documentsResult.items);
+    const scopedProjects = portalState.projects.filter((project) => allowedPlantIds.includes(project.plantId));
     const scopedUploads = dashboard.recentUploads.filter((document) => allowedPlantIds.includes(document.plantId));
 
     setData({ ...dashboard, recentUploads: scopedUploads });
     setPlants(scopedPlants);
     setProjects(scopedProjects);
+    setGovernancePolicy(governanceResult);
   }
 
   useEffect(() => {
@@ -82,7 +100,19 @@ export function ManagerUpload() {
   );
 
   function handleSelectedFile(nextFile: File | null) {
+    if (nextFile) {
+      const extension = nextFile.name.split(".").pop()?.toLowerCase() || "";
+      if (!governancePolicy.allowedUploadFormats.includes(extension)) {
+        setMessage(`Only these file formats are allowed: ${governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ")}.`);
+        setMessageType("error");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        setFile(null);
+        return;
+      }
+    }
     setFile(nextFile);
+    setMessage("");
+    setMessageType("");
     if (!nextFile) return;
     const inferredName = nextFile.name.replace(/\.[^.]+$/, "");
     setForm((prev) => ({
@@ -118,6 +148,9 @@ export function ManagerUpload() {
     setMessageType("");
     try {
       const created = await documentsApi.create(formData);
+      const latestDocuments = await documentsApi.list({ page: 1, pageSize: 500 });
+      const portalState = readPortalState(plants, latestDocuments.items);
+      persistPortalState(assignDocumentToProject(portalState, created.id, form.projectId));
       setForm({
         company: "Midwest Ltd",
         plant: allowedPlantIds[0] || "",
@@ -158,6 +191,8 @@ export function ManagerUpload() {
 
   if (loading) return <div className="p-7 text-slate-500">Loading upload workspace...</div>;
   if (!data) return <div className="p-7 text-[#BB0000]">{message || "Upload workspace unavailable."}</div>;
+
+  const acceptTypes = governancePolicy.allowedUploadFormats.map((value) => `.${value}`).join(",");
 
   return (
     <div className="space-y-6">
@@ -246,7 +281,9 @@ export function ManagerUpload() {
               <UploadCloud size={28} className={dragOver ? "text-teal-600" : "text-slate-500"} />
             </div>
             <div className="mt-4 text-lg font-semibold text-slate-900">Drop a file here or browse from your device</div>
-            <div className="mt-2 text-sm text-slate-500">PDF, DOCX, XLSX, PNG, or JPG up to 25 MB.</div>
+            <div className="mt-2 text-sm text-slate-500">
+              Accepted formats: {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ")} up to 25 MB.
+            </div>
             <button type="button" onClick={(event) => { event.stopPropagation(); fileInputRef.current?.click(); }} className="mt-4 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
               Choose document
             </button>
@@ -305,7 +342,7 @@ export function ManagerUpload() {
               <textarea value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} rows={4} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-teal-500" />
             </label>
             <div className="md:col-span-2">
-              <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={(event) => handleSelectedFile(event.target.files?.[0] || null)} className="hidden" />
+              <input ref={fileInputRef} type="file" accept={acceptTypes} onChange={(event) => handleSelectedFile(event.target.files?.[0] || null)} className="hidden" />
             </div>
             <div className="md:col-span-2 flex flex-wrap items-center gap-3">
               <button type="submit" disabled={submitting} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">

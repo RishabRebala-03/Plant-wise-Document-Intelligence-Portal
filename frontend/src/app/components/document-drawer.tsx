@@ -42,7 +42,7 @@ export function DocumentDrawer({
   const [editForm, setEditForm] = useState({
     name: doc.name,
     category: doc.category,
-    company: doc.company || "Midwest Ltd",
+    company: doc.company || "",
     uploadComment: doc.uploadComment || "",
   });
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
@@ -61,7 +61,7 @@ export function DocumentDrawer({
     setEditForm({
       name: doc.name,
       category: doc.category,
-      company: doc.company || "Midwest Ltd",
+      company: doc.company || "",
       uploadComment: doc.uploadComment || "",
     });
     setReplacementFile(null);
@@ -256,7 +256,6 @@ export function DocumentDrawer({
                   ["Category", doc.category],
                   ["Uploaded By", doc.uploadedBy],
                   ["Upload Date", doc.date || "-"],
-                  ["Status", doc.status],
                   ["Version", `v${doc.version}`],
                   ["Original File", fileName || doc.file?.name || "Not attached"],
                   ["File Type", doc.file?.contentType || "Not available"],

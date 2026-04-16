@@ -67,8 +67,6 @@ def serialize_document(document: dict[str, Any], comments: list[dict[str, Any]] 
         "uploadComment": document.get("upload_comment"),
         "status": document.get("status", "Draft"),
         "company": document.get("company", "Midwest Ltd"),
-        "projectId": document.get("project_id"),
-        "projectName": document.get("project_name"),
         "file": {
             "name": document.get("file_name"),
             "contentType": document.get("content_type"),
@@ -81,22 +79,6 @@ def serialize_document(document: dict[str, Any], comments: list[dict[str, Any]] 
         },
         "createdAt": to_iso(document.get("created_at")),
         "updatedAt": to_iso(document.get("updated_at")),
-    }
-
-
-def serialize_project(project: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": project["id"],
-        "plantId": project["plant_id"],
-        "plantName": project["plant_name"],
-        "name": project["name"],
-        "code": project.get("code", ""),
-        "description": project.get("description", ""),
-        "owner": project.get("owner_name") or project.get("owner") or "Unassigned",
-        "status": project.get("status", "Active"),
-        "createdAt": to_iso(project.get("created_at")),
-        "dueDate": to_iso(project.get("due_date")),
-        "documentIds": project.get("document_ids", []),
     }
 
 

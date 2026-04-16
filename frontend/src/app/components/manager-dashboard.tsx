@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
-  FileText, Clock, CheckCircle2, Activity,
+  FileText, Clock, Activity,
   ArrowRight, AlertCircle, BarChart2,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, dashboardApi, documentsApi } from "../lib/api";
@@ -58,7 +58,7 @@ export function ManagerDashboard() {
     return [
       { label: "My Documents", value: data.stats.myDocuments, icon: FileText, color: "#0A6ED1", bg: "#EBF4FD", note: "Documents in your plant scope" },
       { label: "Uploaded This Week", value: data.stats.uploadedThisWeek, icon: Clock, color: "#E9730C", bg: "#FEF3E7", note: "Recent document velocity" },
-      { label: "Approved", value: data.stats.approved, icon: CheckCircle2, color: "#107E3E", bg: "#EBF5EF", note: "Ready for downstream use" },
+      { label: "Recent Activity", value: data.activity.length, icon: Activity, color: "#107E3E", bg: "#EBF5EF", note: "Tracked actions in your document workspace" },
     ];
   }, [data]);
 

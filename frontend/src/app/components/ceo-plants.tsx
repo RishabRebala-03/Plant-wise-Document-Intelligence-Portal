@@ -88,16 +88,6 @@ export function CeoPlants() {
                     <MapPin size={11} /> {plant.location || "-"}
                   </div>
                 </div>
-                <span
-                  className="px-2 py-0.5 shrink-0"
-                  style={{
-                    fontSize: 11,
-                    background: plant.status === "Operational" ? "#EBF5EF" : "#FEF3E7",
-                    color: plant.status === "Operational" ? "#107E3E" : "#E9730C",
-                  }}
-                >
-                  {plant.status}
-                </span>
               </div>
 
               <div className="grid grid-cols-3 gap-3 mb-4">

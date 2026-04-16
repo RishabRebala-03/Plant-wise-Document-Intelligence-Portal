@@ -115,7 +115,6 @@ function detailRows(activity: Activity) {
   pushRow("Document / Record", activity.documentName || metadata.targetUserName || activity.entityId, { always: true });
   pushRow("Record Type", formatEntityType(activity.entityType), { always: true });
   pushRow("Category", metadata.documentCategory);
-  pushRow("Current Status", metadata.documentStatus || metadata.status || metadata.targetStatus);
   pushRow("Version", metadata.version);
   pushRow("Changed Fields", metadata.updatedFields);
   pushRow("Comment Visibility", metadata.visibility);
@@ -185,7 +184,6 @@ function flattenActivity(activity: Activity) {
     recordType: formatEntityType(activity.entityType || "Not available"),
     recordReference: activity.documentId || activity.entityId || "Not available",
     category: String(metadata.documentCategory || "Not available"),
-    currentStatus: String(metadata.documentStatus || metadata.status || metadata.targetStatus || "Not available"),
     version: String(metadata.version || "Not available"),
     changedFields: Array.isArray(metadata.updatedFields) && metadata.updatedFields.length > 0 ? metadata.updatedFields.join(", ") : "Not available",
     commentVisibility: String(metadata.visibility || "Not available"),

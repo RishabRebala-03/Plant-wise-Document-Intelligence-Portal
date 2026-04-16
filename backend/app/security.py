@@ -13,6 +13,89 @@ from pymongo.errors import DuplicateKeyError
 from .db import get_db, next_public_id
 from .utils import ensure_utc, utc_now
 
+DEFAULT_UPLOAD_FORMATS = ["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"]
+UPLOAD_CONTENT_TYPE_MAP = {
+    "pdf": {"application/pdf"},
+    "doc": {"application/msword"},
+    "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    "xls": {"application/vnd.ms-excel"},
+    "xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    "png": {"image/png"},
+    "jpg": {"image/jpeg"},
+    "jpeg": {"image/jpeg"},
+}
+
+DEFAULT_BUSINESS_HOURS = {
+    "timezone": "Asia/Kolkata",
+    "startHour": 7,
+    "endHour": 20,
+    "allowedDays": [0, 1, 2, 3, 4],
+}
+
+
+def get_governance_policy() -> dict[str, Any]:
+    db = get_db()
+    settings = db.app_settings.find_one({"_id": "governance_policy"}) or {}
+    upload_formats = settings.get("allowedUploadFormats")
+    business_hours = settings.get("businessHours")
+    policy = {
+        "allowedUploadFormats": upload_formats if isinstance(upload_formats, list) and upload_formats else list(DEFAULT_UPLOAD_FORMATS),
+        "businessHours": {
+            **DEFAULT_BUSINESS_HOURS,
+            **(business_hours if isinstance(business_hours, dict) else {}),
+        },
+    }
+    db.app_settings.update_one(
+        {"_id": "governance_policy"},
+        {
+            "$setOnInsert": {
+                "allowedUploadFormats": policy["allowedUploadFormats"],
+                "businessHours": policy["businessHours"],
+            }
+        },
+        upsert=True,
+    )
+    return policy
+
+
+def save_governance_policy(*, allowed_upload_formats: list[str], business_hours: dict[str, Any]) -> dict[str, Any]:
+    db = get_db()
+    policy = {
+        "allowedUploadFormats": allowed_upload_formats,
+        "businessHours": {
+            **DEFAULT_BUSINESS_HOURS,
+            **business_hours,
+        },
+    }
+    db.app_settings.update_one(
+        {"_id": "governance_policy"},
+        {"$set": policy},
+        upsert=True,
+    )
+    return policy
+
+
+def allowed_upload_extensions() -> list[str]:
+    policy = get_governance_policy()
+    formats = policy.get("allowedUploadFormats") or []
+    sanitized = []
+    for value in formats:
+        extension = str(value).strip().lower().lstrip(".")
+        if extension and extension in UPLOAD_CONTENT_TYPE_MAP and extension not in sanitized:
+            sanitized.append(extension)
+    return sanitized or list(DEFAULT_UPLOAD_FORMATS)
+
+
+def allowed_upload_content_types() -> set[str]:
+    content_types: set[str] = set()
+    for extension in allowed_upload_extensions():
+        content_types.update(UPLOAD_CONTENT_TYPE_MAP.get(extension, set()))
+    return content_types
+
+
+def current_business_hours() -> dict[str, Any]:
+    return get_governance_policy()["businessHours"]
+
 
 def get_client_ip() -> str:
     forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
@@ -88,11 +171,12 @@ def is_business_hours_allowed(user: dict[str, Any]) -> bool:
     if user.get("role") != "Mining Manager":
         return True
 
-    tz = ZoneInfo(current_app.config["BUSINESS_HOURS_TIMEZONE"])
+    business_hours = current_business_hours()
+    tz = ZoneInfo(str(business_hours.get("timezone") or current_app.config["BUSINESS_HOURS_TIMEZONE"]))
     now = datetime.now(tz)
-    allowed_days = current_app.config["BUSINESS_HOURS_ALLOWED_DAYS"]
-    start_hour = current_app.config["BUSINESS_HOURS_START_HOUR"]
-    end_hour = current_app.config["BUSINESS_HOURS_END_HOUR"]
+    allowed_days = business_hours.get("allowedDays") or list(current_app.config["BUSINESS_HOURS_ALLOWED_DAYS"])
+    start_hour = int(business_hours.get("startHour", current_app.config["BUSINESS_HOURS_START_HOUR"]))
+    end_hour = int(business_hours.get("endHour", current_app.config["BUSINESS_HOURS_END_HOUR"]))
 
     if now.weekday() not in allowed_days:
         return False

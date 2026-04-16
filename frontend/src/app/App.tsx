@@ -12,6 +12,7 @@ import {
   Bell,
   Building2,
   Clock3,
+  Database,
   FileText,
   Filter,
   FolderKanban,
@@ -66,9 +67,11 @@ import { LoginPage } from "./components/login-page";
 import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
+import { DocumentDrawer } from "./components/document-drawer";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
+  createProject,
   defaultPortalState,
   enrichDocuments,
   formatRole,
@@ -88,9 +91,10 @@ import {
   type EnrichedDocument,
   type IpRule,
   type PortalState,
+  type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Activity, Comment, DocumentRecord, NotificationItem, Plant, ProjectRecord, SessionRecord, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentRecord, GovernancePolicy, NotificationItem, OutsideHoursAttempt, Plant, SessionRecord, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -103,7 +107,7 @@ type PortalContextValue = {
   portalState: PortalState;
   loading: boolean;
   refreshData: () => Promise<void>;
-  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => Promise<ProjectRecord>;
+  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => ProjectRecord;
   markDocumentLocked: (documentId: string) => void;
   setAccessRules: (rules: AccessRule[]) => Promise<void>;
   setIpRules: (rules: IpRule[]) => void;
@@ -208,18 +212,16 @@ function emptyNotifications() {
 
 function PortalProvider({ user, children }: { user: User; children: ReactNode }) {
   const [plants, setPlants] = useState<Plant[]>([]);
-  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [rawDocuments, setRawDocuments] = useState<DocumentRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [portalState, setPortalState] = useState<PortalState>(() => defaultPortalState());
+  const [portalState, setPortalState] = useState<PortalState>(() => defaultPortalState([], []));
   const [loading, setLoading] = useState(true);
 
   async function loadAll() {
-    const [documentsResult, plantsResult, projectsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
+    const [documentsResult, plantsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
       documentsApi.list({ page: 1, pageSize: 500 }),
       plantsApi.list(),
-      projectsApi.list(),
       usersApi.list().catch(() => [] as User[]),
       notificationsApi.list().catch(() => emptyNotifications()),
       settingsApi.listAccessRules().catch(() => ({ items: [] as AccessRule[] })),
@@ -227,17 +229,19 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
 
     setRawDocuments(documentsResult.items);
     setPlants(plantsResult.items);
-    setProjects(projectsResult.items);
     setUsers(usersResult);
     setNotifications(notificationsResult.items);
     setPortalState((current) => {
-      const next = readPortalState();
-      return {
+      const next = readPortalState(plantsResult.items, documentsResult.items);
+      return current.projects.length === 0 ? next : {
         ...next,
         accessRules: accessRulesResult.items.length ? accessRulesResult.items : next.accessRules,
         ipRules: current.ipRules,
         sessionPolicy: current.sessionPolicy,
         managerDocumentLocks: current.managerDocumentLocks,
+        projects: next.projects.filter((project) => project.source === "derived").concat(
+          current.projects.filter((project) => project.source === "custom"),
+        ),
       };
     });
   }
@@ -248,7 +252,7 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     loadAll()
       .catch(() => {
         if (!active) return;
-        setPortalState(defaultPortalState());
+        setPortalState(defaultPortalState([], []));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -268,18 +272,19 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
   }, [user.id]);
 
   useEffect(() => {
+    if (!plants.length && !rawDocuments.length) return;
     persistPortalState(portalState);
-  }, [portalState]);
+  }, [plants.length, portalState, rawDocuments.length]);
 
   useEffect(() => {
     function syncPortalState(event: StorageEvent) {
       if (event.key !== PORTAL_STATE_KEY) return;
-      setPortalState(readPortalState());
+      setPortalState(readPortalState(plants, rawDocuments));
     }
 
     window.addEventListener("storage", syncPortalState);
     return () => window.removeEventListener("storage", syncPortalState);
-  }, []);
+  }, [plants, rawDocuments]);
 
   const visiblePlantIds = useMemo(() => new Set(scopedPlantIds(user, plants)), [plants, user]);
   const scopedPlants = useMemo(
@@ -287,15 +292,15 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     [plants, visiblePlantIds],
   );
   const scopedProjects = useMemo(
-    () => projects.filter((project) => visiblePlantIds.has(project.plantId)),
-    [projects, visiblePlantIds],
+    () => portalState.projects.filter((project) => visiblePlantIds.has(project.plantId)),
+    [portalState.projects, visiblePlantIds],
   );
   const scopedRawDocuments = useMemo(
     () => rawDocuments.filter((document) => visiblePlantIds.has(document.plantId)),
     [rawDocuments, visiblePlantIds],
   );
   const documents = useMemo(() => {
-    const enriched = enrichDocuments(scopedRawDocuments, scopedProjects, user, scopedPlants);
+    const enriched = enrichDocuments(scopedRawDocuments, scopedProjects, user, scopedPlants, portalState.projectAssignments);
     return withManagerLocks(enriched, portalState, user);
   }, [portalState, scopedPlants, scopedProjects, scopedRawDocuments, user]);
 
@@ -310,10 +315,14 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     portalState,
     loading,
     refreshData: loadAll,
-    createProjectRecord: async (draft) => {
-      const created = await projectsApi.create(draft);
-      setProjects((current) => [created, ...current]);
-      return created;
+    createProjectRecord: (draft) => {
+      let created: ProjectRecord | null = null;
+      setPortalState((current) => {
+        const next = createProject(current, draft);
+        created = next.projects[next.projects.length - 1];
+        return next;
+      });
+      return created!;
     },
     markDocumentLocked: (documentId) => {
       setPortalState((current) => lockManagerDocument(current, user.id, documentId));
@@ -543,6 +552,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       [
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
         { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
+        { label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
         { label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" },
         { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
@@ -1083,7 +1093,7 @@ function PlantProjectsPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-slate-900">{project.name}</div>
-                <div className="mt-1 text-sm text-slate-500">{project.code} · {project.status}</div>
+                <div className="mt-1 text-sm text-slate-500">{project.code}</div>
               </div>
               <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{project.documentIds.length} docs</div>
             </div>
@@ -1376,7 +1386,6 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                 <th className="px-4 py-3 font-medium">Manager</th>
                 <th className="px-4 py-3 font-medium">Identifier</th>
                 <th className="px-4 py-3 font-medium">Uploaded</th>
-                <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
@@ -1393,16 +1402,11 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                   <td className="px-4 py-4 text-slate-600">{document.managerName}</td>
                   <td className="px-4 py-4 font-mono text-xs text-slate-600">{document.identifier}</td>
                   <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
-                  <td className="px-4 py-4">
-                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${document.accessLocked ? "bg-[#EAECEE] text-[#354A5F]" : "bg-[#EBF5EF] text-[#107E3E]"}`}>
-                      {document.accessLocked ? "Locked after access" : "Available"}
-                    </span>
-                  </td>
                 </tr>
               ))}
               {!filtered.length ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">No documents matched the selected filters.</td>
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No documents matched the selected filters.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1463,9 +1467,6 @@ function DocumentDetailPage() {
             <p className="mt-3 text-sm leading-6 text-white/72">
               This dedicated detail page keeps metadata, notes, and file access separate from the document listing view.
             </p>
-          </div>
-          <div className="rounded-2xl border border-white/15 bg-white/6 px-4 py-3 text-sm">
-            {document.accessLocked ? "Locked after access" : "Ready for review"}
           </div>
         </div>
       </section>
@@ -1614,10 +1615,6 @@ function AnalyticsPage() {
           name: project.name.length > 18 ? `${project.name.slice(0, 18)}...` : project.name,
           documents: projectDocs.length,
           privateNotes,
-          statusScore:
-            project.status === "Active" ? 90 :
-            project.status === "At Risk" ? 55 :
-            project.status === "Planned" ? 35 : 20,
         };
       })
       .sort((a, b) => b.documents - a.documents)
@@ -2116,6 +2113,7 @@ function AdminDashboardPage() {
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
         {can("canManageUsers") ? <AdminTile title="Manager oversight" body="Edit, remove, or inactivate manager accounts." to="/admin/users" icon={UserCog} /> : null}
+        {can("canManageUsers") ? <AdminTile title="Master data" body="Create users, plants, projects, and govern documents from one admin workspace." to="/admin/master-data" icon={Database} /> : null}
         <AdminTile title="Access control" body="Adjust frontend role visibility and privileged actions." to="/admin/access" icon={ShieldCheck} />
         {can("canConfigureIp") ? <AdminTile title="IP configuration" body="Maintain allowed, blocked, and review network addresses." to="/admin/network" icon={Globe} /> : null}
         <AdminTile title="Session policies" body="Configure auto logout and concurrent session handling." to="/admin/sessions" icon={Clock3} />
@@ -2138,17 +2136,659 @@ function AdminTile({ title, body, to, icon: Icon }: { title: string; body: strin
   );
 }
 
+function AdminMasterDataPage() {
+  const { users, plants, documents, refreshData } = usePortal();
+  const navigate = useNavigate();
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [projectError, setProjectError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [userSubmitting, setUserSubmitting] = useState(false);
+  const [plantSubmitting, setPlantSubmitting] = useState(false);
+  const [projectSubmitting, setProjectSubmitting] = useState(false);
+  const [policySubmitting, setPolicySubmitting] = useState(false);
+  const [selectedDocument, setSelectedDocument] = useState<EnrichedDocument | null>(null);
+  const [documentComments, setDocumentComments] = useState<Comment[]>([]);
+  const [editingPlantId, setEditingPlantId] = useState<string | null>(null);
+  const [governancePolicy, setGovernancePolicy] = useState<GovernancePolicy>({
+    allowedUploadFormats: ["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"],
+    businessHours: {
+      timezone: "Asia/Kolkata",
+      startHour: 7,
+      endHour: 20,
+      allowedDays: [0, 1, 2, 3, 4],
+    },
+  });
+  const [userDraft, setUserDraft] = useState({
+    name: "",
+    email: "",
+    role: "Mining Manager" as UserRole,
+    password: "Password123!",
+    assignedPlantIds: [] as string[],
+  });
+  const [plantDraft, setPlantDraft] = useState({
+    name: "",
+    company: "Midwest Limited",
+    location: "",
+    capacity: "",
+    manager: "",
+  });
+  const [plantEditDraft, setPlantEditDraft] = useState({
+    name: "",
+    company: "",
+    location: "",
+    capacity: "",
+    manager: "",
+  });
+  const [projectDraft, setProjectDraft] = useState({
+    plantId: "",
+    name: "",
+    code: "",
+    description: "",
+    dueDate: "",
+  });
+  const [documentPlantFilter, setDocumentPlantFilter] = useState("");
+  const [documentProjectFilter, setDocumentProjectFilter] = useState("");
+
+  async function loadProjects() {
+    setLoadingProjects(true);
+    try {
+      const result = await projectsApi.list();
+      setProjects(result.items as ProjectRecord[]);
+      setProjectError("");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setProjectError("Project registry is not available from the backend yet. Restart the backend once to load the new projects route.");
+      } else {
+        setProjectError(err instanceof Error ? err.message : "Unable to load project registry.");
+      }
+    } finally {
+      setLoadingProjects(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadProjects();
+  }, []);
+
+  useEffect(() => {
+    settingsApi
+      .getGovernancePolicy()
+      .then((result) => setGovernancePolicy(result))
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 404) {
+          setError("Governance policy settings are not available from the backend yet. Restart the backend once to load the new admin policy route.");
+          return;
+        }
+        setError(err instanceof Error ? err.message : "Unable to load governance policy.");
+      });
+  }, []);
+
+  const filteredDocuments = useMemo(
+    () =>
+      documents.filter((document) => {
+        const matchesPlant = !documentPlantFilter || document.plantId === documentPlantFilter;
+        const matchesProject = !documentProjectFilter || document.projectId === documentProjectFilter;
+        return matchesPlant && matchesProject;
+      }),
+    [documentPlantFilter, documentProjectFilter, documents],
+  );
+
+  function resetMessages() {
+    setNotice("");
+    setError("");
+  }
+
+  async function createUserRecord() {
+    if (!userDraft.name.trim() || !userDraft.email.trim()) {
+      setError("User name and email are required.");
+      return;
+    }
+    setUserSubmitting(true);
+    resetMessages();
+    try {
+      await usersApi.create({
+        name: userDraft.name.trim(),
+        email: userDraft.email.trim(),
+        role: userDraft.role,
+        password: userDraft.password,
+        assignedPlantIds: userDraft.assignedPlantIds,
+      });
+      setNotice(`${userDraft.role} account created successfully.`);
+      setUserDraft({
+        name: "",
+        email: "",
+        role: "Mining Manager",
+        password: "Password123!",
+        assignedPlantIds: [],
+      });
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create user.");
+    } finally {
+      setUserSubmitting(false);
+    }
+  }
+
+  async function createPlantRecord() {
+    if (!plantDraft.name.trim() || !plantDraft.company.trim()) {
+      setError("Plant name and company are required.");
+      return;
+    }
+    setPlantSubmitting(true);
+    resetMessages();
+    try {
+      await plantsApi.create({
+        name: plantDraft.name.trim(),
+        company: plantDraft.company.trim(),
+        location: plantDraft.location.trim(),
+        capacity: plantDraft.capacity.trim(),
+        manager: plantDraft.manager.trim(),
+      });
+      setNotice(`${plantDraft.name.trim()} was added to master data.`);
+      setPlantDraft({
+        name: "",
+        company: "Midwest Limited",
+        location: "",
+        capacity: "",
+        manager: "",
+      });
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create plant.");
+    } finally {
+      setPlantSubmitting(false);
+    }
+  }
+
+  async function createProjectEntry() {
+    if (!projectDraft.plantId || !projectDraft.name.trim() || !projectDraft.description.trim()) {
+      setError("Pick a plant and complete the project name and description.");
+      return;
+    }
+    setProjectSubmitting(true);
+    resetMessages();
+    try {
+      await projectsApi.create({
+        plantId: projectDraft.plantId,
+        name: projectDraft.name.trim(),
+        code: projectDraft.code.trim(),
+        description: projectDraft.description.trim(),
+        dueDate: projectDraft.dueDate || null,
+      });
+      setNotice("Project created successfully.");
+      setProjectError("");
+      setProjectDraft({
+        plantId: "",
+        name: "",
+        code: "",
+        description: "",
+        dueDate: "",
+      });
+      await loadProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create project.");
+    } finally {
+      setProjectSubmitting(false);
+    }
+  }
+
+  async function saveGovernancePolicy() {
+    setPolicySubmitting(true);
+    resetMessages();
+    try {
+      const updated = await settingsApi.updateGovernancePolicy(governancePolicy);
+      setGovernancePolicy(updated);
+      setNotice("Upload format policy and manager business hours were updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update governance policy.");
+    } finally {
+      setPolicySubmitting(false);
+    }
+  }
+
+  function openPlantEditor(plant: Plant) {
+    setEditingPlantId(plant.id);
+    setPlantEditDraft({
+      name: plant.name,
+      company: plant.company,
+      location: plant.location || "",
+      capacity: plant.capacity || "",
+      manager: plant.manager || "",
+    });
+    resetMessages();
+  }
+
+  async function savePlantEdit() {
+    if (!editingPlantId) return;
+    setPlantSubmitting(true);
+    resetMessages();
+    try {
+      await plantsApi.update(editingPlantId, plantEditDraft);
+      setNotice("Plant details updated.");
+      setEditingPlantId(null);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update plant.");
+    } finally {
+      setPlantSubmitting(false);
+    }
+  }
+
+  async function removePlantRecord(plant: Plant) {
+    if (!window.confirm(`Remove ${plant.name} from master data?`)) return;
+    resetMessages();
+    try {
+      await plantsApi.remove(plant.id);
+      setNotice(`${plant.name} was removed.`);
+      if (editingPlantId === plant.id) setEditingPlantId(null);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to remove plant.");
+    }
+  }
+
+  async function openDocumentEditor(document: EnrichedDocument) {
+    setSelectedDocument(document);
+    resetMessages();
+    try {
+      const result = await documentsApi.get(document.id);
+      setDocumentComments(result.comments);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load document details.");
+      setDocumentComments([]);
+    }
+  }
+
+  async function updateDocumentRecord(documentId: string, payload: FormData) {
+    await documentsApi.update(documentId, payload);
+    setNotice("Document updated.");
+    setSelectedDocument(null);
+    await refreshData();
+  }
+
+  async function removeDocumentRecord(document: EnrichedDocument) {
+    if (!window.confirm(`Delete ${document.name}? This cannot be undone.`)) return;
+    resetMessages();
+    try {
+      await documentsApi.remove(document.id);
+      setNotice(`${document.name} was deleted.`);
+      if (selectedDocument?.id === document.id) setSelectedDocument(null);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete document.");
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Master Data" }]} />
+
+      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#164e63)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.22)]">
+        <div className="max-w-4xl">
+          <div className="text-xs uppercase tracking-[0.26em] text-white/55">Master data control room</div>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Create and govern the platform’s foundational records</h1>
+          <p className="mt-3 text-sm leading-6 text-white/72">
+            Admin can create users, plants, and projects here, then manage documents from a plant-wise view without jumping across multiple admin screens.
+          </p>
+        </div>
+      </section>
+
+      {notice ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div> : null}
+      {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Users" value={users.length} hint="All platform accounts available for governance." icon={Users} />
+        <MetricCard label="Plants" value={plants.length} hint="Operational plant records currently in master data." icon={Building2} tone="blue" />
+        <MetricCard label="Projects" value={loadingProjects ? "..." : projects.length} hint="Projects registered across all plants." icon={FolderKanban} tone="amber" />
+        <MetricCard label="Documents" value={documents.length} hint="Documents available for plant-wise admin control." icon={FileText} tone="teal" />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <SectionCard title="Create user" subtitle="Provision Admin, CEO, or Mining Manager accounts">
+          <div className="grid gap-3">
+            <input value={userDraft.name} onChange={(event) => setUserDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Full name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={userDraft.email} onChange={(event) => setUserDraft((current) => ({ ...current, email: event.target.value }))} placeholder="Email address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={userDraft.role} onChange={(event) => setUserDraft((current) => ({ ...current, role: event.target.value as UserRole, assignedPlantIds: event.target.value === "Mining Manager" ? current.assignedPlantIds : [] }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="Admin">Admin</option>
+              <option value="CEO">CEO</option>
+              <option value="Mining Manager">Mining Manager</option>
+            </select>
+            <input value={userDraft.password} onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))} placeholder="Temporary password" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Assigned plants</div>
+              <div className="mt-1 text-xs text-slate-500">Optional for Admin and CEO. Use this to scope Mining Managers.</div>
+              <div className="mt-3 grid max-h-44 gap-2 overflow-auto">
+                {plants.map((plant) => (
+                  <label key={`master-user-${plant.id}`} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 text-sm text-slate-700">
+                    <span>{plant.name}</span>
+                    <input
+                      type="checkbox"
+                      checked={userDraft.assignedPlantIds.includes(plant.id)}
+                      disabled={userDraft.role !== "Mining Manager"}
+                      onChange={(event) => setUserDraft((current) => ({
+                        ...current,
+                        assignedPlantIds: event.target.checked
+                          ? [...current.assignedPlantIds, plant.id]
+                          : current.assignedPlantIds.filter((id) => id !== plant.id),
+                      }))}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => void createUserRecord()} disabled={userSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                Create user
+              </button>
+              <button onClick={() => navigate("/admin/users")} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                Open full user manager
+              </button>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Create plant" subtitle="Add new operational plants to the platform">
+          <div className="grid gap-3">
+            <input value={plantDraft.name} onChange={(event) => setPlantDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Plant name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.company} onChange={(event) => setPlantDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.location} onChange={(event) => setPlantDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Location" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.capacity} onChange={(event) => setPlantDraft((current) => ({ ...current, capacity: event.target.value }))} placeholder="Capacity" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.manager} onChange={(event) => setPlantDraft((current) => ({ ...current, manager: event.target.value }))} placeholder="Primary manager name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <button onClick={() => void createPlantRecord()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+              Create plant
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Create project" subtitle="Register a new project under a selected plant">
+          <div className="grid gap-3">
+            <select value={projectDraft.plantId} onChange={(event) => setProjectDraft((current) => ({ ...current, plantId: event.target.value }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">Select plant</option>
+              {plants.map((plant) => (
+                <option key={`project-${plant.id}`} value={plant.id}>{plant.name}</option>
+              ))}
+            </select>
+            <input value={projectDraft.name} onChange={(event) => setProjectDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={projectDraft.code} onChange={(event) => setProjectDraft((current) => ({ ...current, code: event.target.value }))} placeholder="Project code" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <textarea value={projectDraft.description} onChange={(event) => setProjectDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Project description" rows={4} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-teal-500" />
+            <input type="date" value={projectDraft.dueDate} onChange={(event) => setProjectDraft((current) => ({ ...current, dueDate: event.target.value }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <button onClick={() => void createProjectEntry()} disabled={projectSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+              Create project
+            </button>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <SectionCard title="Document upload formats" subtitle="Only these file types will be accepted in the manager upload workspace">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"].map((extension) => (
+              <label key={`format-${extension}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                <span>.{extension.toUpperCase()}</span>
+                <input
+                  type="checkbox"
+                  checked={governancePolicy.allowedUploadFormats.includes(extension)}
+                  onChange={(event) => setGovernancePolicy((current) => ({
+                    ...current,
+                    allowedUploadFormats: event.target.checked
+                      ? [...current.allowedUploadFormats, extension]
+                      : current.allowedUploadFormats.filter((value) => value !== extension),
+                  }))}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 text-xs text-slate-500">Managers will only be able to upload files matching the allowed formats selected here.</div>
+        </SectionCard>
+
+        <SectionCard title="Mining manager business hours" subtitle="Define the permitted working window for all mining-manager sign-ins">
+          <div className="grid gap-4 md:grid-cols-3">
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Timezone</span>
+              <input value={governancePolicy.businessHours.timezone} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, timezone: event.target.value } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">Start hour</span>
+              <input type="number" min={0} max={23} value={governancePolicy.businessHours.startHour} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, startHour: Number(event.target.value) || 0 } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">End hour</span>
+              <input type="number" min={1} max={24} value={governancePolicy.businessHours.endHour} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, endHour: Number(event.target.value) || 0 } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "Mon", value: 0 },
+              { label: "Tue", value: 1 },
+              { label: "Wed", value: 2 },
+              { label: "Thu", value: 3 },
+              { label: "Fri", value: 4 },
+              { label: "Sat", value: 5 },
+              { label: "Sun", value: 6 },
+            ].map((day) => (
+              <label key={`day-${day.value}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                <span>{day.label}</span>
+                <input
+                  type="checkbox"
+                  checked={governancePolicy.businessHours.allowedDays.includes(day.value)}
+                  onChange={(event) => setGovernancePolicy((current) => ({
+                    ...current,
+                    businessHours: {
+                      ...current.businessHours,
+                      allowedDays: event.target.checked
+                        ? [...current.businessHours.allowedDays, day.value].sort((a, b) => a - b)
+                        : current.businessHours.allowedDays.filter((value) => value !== day.value),
+                    },
+                  }))}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-4">
+            <button onClick={() => void saveGovernancePolicy()} disabled={policySubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+              Save policy controls
+            </button>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <SectionCard title="User registry snapshot" subtitle="Recent accounts and direct access into user governance">
+          <div className="overflow-hidden rounded-[24px] border border-slate-200">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-sm text-slate-500">
+                  <th className="px-4 py-3 font-medium">Name</th>
+                  <th className="px-4 py-3 font-medium">Role</th>
+                  <th className="px-4 py-3 font-medium">Assigned scope</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                {users.slice(0, 8).map((candidate) => (
+                  <tr key={candidate.id}>
+                    <td className="px-4 py-4">
+                      <div className="font-medium text-slate-900">{candidate.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">{candidate.email}</div>
+                    </td>
+                    <td className="px-4 py-4 text-slate-600">{candidate.role}</td>
+                    <td className="px-4 py-4 text-slate-600">{candidate.assignedPlants?.join(", ") || candidate.plant || "Enterprise access"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Plant registry" subtitle="Review, edit, or remove plants from master data">
+          <div className="space-y-4">
+            {plants.map((plant) => (
+              <div key={plant.id} className="rounded-[24px] border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold text-slate-900">{plant.name}</div>
+                    <div className="mt-1 text-sm text-slate-500">{plant.company}{plant.location ? ` • ${plant.location}` : ""}</div>
+                    <div className="mt-1 text-xs text-slate-400">{plant.documents} document{plant.documents === 1 ? "" : "s"} linked</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => openPlantEditor(plant)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                      Edit
+                    </button>
+                    <button onClick={() => void removePlantRecord(plant)} className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {editingPlantId ? (
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                <div className="text-base font-semibold text-slate-900">Edit plant</div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <input value={plantEditDraft.name} onChange={(event) => setPlantEditDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Plant name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.company} onChange={(event) => setPlantEditDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.location} onChange={(event) => setPlantEditDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Location" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.capacity} onChange={(event) => setPlantEditDraft((current) => ({ ...current, capacity: event.target.value }))} placeholder="Capacity" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.manager} onChange={(event) => setPlantEditDraft((current) => ({ ...current, manager: event.target.value }))} placeholder="Manager" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 md:col-span-2" />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button onClick={() => void savePlantEdit()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                    Save plant
+                  </button>
+                  <button onClick={() => setEditingPlantId(null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Project registry" subtitle="All created projects across the platform">
+        {loadingProjects ? <div className="text-sm text-slate-500">Loading project registry...</div> : null}
+        {!loadingProjects && projectError ? <div className="text-sm text-amber-700">{projectError}</div> : null}
+        {!loadingProjects && !projectError ? (
+          <div className="overflow-hidden rounded-[24px] border border-slate-200">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-sm text-slate-500">
+                  <th className="px-4 py-3 font-medium">Project</th>
+                  <th className="px-4 py-3 font-medium">Plant</th>
+                  <th className="px-4 py-3 font-medium">Owner</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
+                  <th className="px-4 py-3 font-medium">Documents</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                {projects.map((project) => (
+                  <tr key={project.id}>
+                    <td className="px-4 py-4">
+                      <div className="font-medium text-slate-900">{project.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">{project.code || project.id}</div>
+                    </td>
+                    <td className="px-4 py-4 text-slate-600">{project.plantName}</td>
+                    <td className="px-4 py-4 text-slate-600">{project.owner}</td>
+                    <td className="px-4 py-4 text-slate-600">{formatDate(project.createdAt)}</td>
+                    <td className="px-4 py-4 text-slate-600">{project.documentIds.length}</td>
+                  </tr>
+                ))}
+                {!projects.length ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-slate-500">No projects have been created yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard title="Document registry" subtitle="Plant-wise document visibility with edit and delete controls">
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <select value={documentPlantFilter} onChange={(event) => setDocumentPlantFilter(event.target.value)} className="h-11 min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+            <option value="">All plants</option>
+            {plants.map((plant) => (
+              <option key={`doc-plant-${plant.id}`} value={plant.id}>{plant.name}</option>
+            ))}
+          </select>
+          <select value={documentProjectFilter} onChange={(event) => setDocumentProjectFilter(event.target.value)} className="h-11 min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+            <option value="">All projects</option>
+            {projects.map((project) => (
+              <option key={`doc-project-${project.id}`} value={project.id}>{project.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="overflow-hidden rounded-[24px] border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-sm text-slate-500">
+                <th className="px-4 py-3 font-medium">Document</th>
+                <th className="px-4 py-3 font-medium">Plant</th>
+                <th className="px-4 py-3 font-medium">Project</th>
+                <th className="px-4 py-3 font-medium">Uploaded by</th>
+                <th className="px-4 py-3 font-medium">Uploaded</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white text-sm">
+              {filteredDocuments.slice(0, 16).map((document) => (
+                <tr key={document.id}>
+                  <td className="px-4 py-4">
+                    <div className="font-medium text-slate-900">{document.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">{document.category}</div>
+                  </td>
+                  <td className="px-4 py-4 text-slate-600">{document.plant}</td>
+                  <td className="px-4 py-4 text-slate-600">{document.projectName || "-"}</td>
+                  <td className="px-4 py-4 text-slate-600">{document.uploadedBy}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => void openDocumentEditor(document)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+                        Edit
+                      </button>
+                      <button onClick={() => void removeDocumentRecord(document)} className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!filteredDocuments.length ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No documents matched the current plant or project filter.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      {selectedDocument ? (
+        <DocumentDrawer
+          doc={selectedDocument}
+          comments={documentComments}
+          onClose={() => setSelectedDocument(null)}
+          onUpdateDocument={(documentId, payload) => updateDocumentRecord(documentId, payload)}
+          autoStartEdit
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function ManagerOversightPage() {
   const { user, users, plants, refreshData } = usePortal();
   const [managerFilter, setManagerFilter] = useState("");
   const [plantFilter, setPlantFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [editor, setEditor] = useState<User | null>(null);
   const navigate = useNavigate();
-  const [draft, setDraft] = useState({ name: "", email: "", assignedPlantIds: [] as string[], status: "Active" });
+  const [draft, setDraft] = useState({ name: "", email: "", assignedPlantIds: [] as string[] });
 
   const managers = useMemo(
     () => users.filter((candidate) => candidate.role === "Mining Manager"),
@@ -2165,10 +2805,9 @@ function ManagerOversightPage() {
       managers.filter((candidate) => {
         const matchesManager = !managerFilter || candidate.name === managerFilter;
         const matchesPlant = !plantFilter || candidate.assignedPlantIds?.includes(plantFilter);
-        const matchesStatus = !statusFilter || candidate.status === statusFilter;
-        return matchesManager && matchesPlant && matchesStatus;
+        return matchesManager && matchesPlant;
       }),
-    [managerFilter, managers, plantFilter, statusFilter],
+    [managerFilter, managers, plantFilter],
   );
 
   function openEditor(target: User) {
@@ -2177,7 +2816,6 @@ function ManagerOversightPage() {
       name: target.name,
       email: target.email,
       assignedPlantIds: target.assignedPlantIds || (target.plantId ? [target.plantId] : []),
-      status: target.status,
     });
     setError("");
     setMessage("");
@@ -2193,7 +2831,6 @@ function ManagerOversightPage() {
         name: draft.name,
         email: draft.email,
         assignedPlantIds: draft.assignedPlantIds,
-        status: draft.status,
       });
       setEditor(null);
       setMessage(`${draft.name} was updated successfully.`);
@@ -2248,8 +2885,8 @@ function ManagerOversightPage() {
       >
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Managers" value={managers.length} hint="Mining manager accounts in the system." icon={Users} tone="blue" />
-          <MetricCard label="Active" value={managers.filter((candidate) => candidate.status === "Active").length} hint="Managers currently allowed to log in." icon={ShieldCheck} />
-          <MetricCard label="Inactive" value={managers.filter((candidate) => candidate.status !== "Active").length} hint="Disabled managers awaiting reactivation." icon={Lock} tone="rose" />
+          <MetricCard label="Assigned plants" value={managers.reduce((total, candidate) => total + (candidate.assignedPlantIds?.length || 0), 0)} hint="Plant scopes currently distributed across manager accounts." icon={Building2} />
+          <MetricCard label="Portal accounts" value={managers.length} hint="Manager records available for document coordination." icon={ShieldCheck} />
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -2267,11 +2904,6 @@ function ManagerOversightPage() {
             <option value="">All plants</option>
             {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name}</option>)}
           </select>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-            <option value="">All statuses</option>
-            <option value="Active">Active</option>
-            <option value="Disabled">Disabled</option>
-          </select>
           {message ? <div className="text-sm text-emerald-700">{message}</div> : null}
           {error ? <div className="text-sm text-[#BB0000]">{error}</div> : null}
         </div>
@@ -2283,7 +2915,6 @@ function ManagerOversightPage() {
                 <th className="px-4 py-3 font-medium">Manager</th>
                 <th className="px-4 py-3 font-medium">Email</th>
                 <th className="px-4 py-3 font-medium">Plant</th>
-                <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
@@ -2301,11 +2932,6 @@ function ManagerOversightPage() {
                   </td>
                   <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
                   <td className="px-4 py-4 text-slate-600">{candidate.assignedPlants?.join(", ") || candidate.plant || "All plants"}</td>
-                  <td className="px-4 py-4">
-                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${candidate.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                      {candidate.status}
-                    </span>
-                  </td>
                   <td className="px-4 py-4">
                     <div className="flex flex-wrap gap-2">
                       <button onClick={() => openEditor(candidate)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
@@ -2331,7 +2957,7 @@ function ManagerOversightPage() {
               ))}
               {!filtered.length ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">No managers matched the current search.</td>
+                  <td colSpan={4} className="px-4 py-10 text-center text-slate-500">No managers matched the current search.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -2342,7 +2968,7 @@ function ManagerOversightPage() {
           <div className="mt-6 grid gap-4 rounded-[28px] border border-slate-200 bg-slate-50 p-5 md:grid-cols-2">
             <div className="md:col-span-2">
               <div className="text-lg font-semibold text-slate-900">Edit manager</div>
-              <div className="mt-1 text-sm text-slate-500">Update the manager record, plant assignment, or access status.</div>
+              <div className="mt-1 text-sm text-slate-500">Update the manager record and plant assignment.</div>
             </div>
             <label className="space-y-2 text-sm">
               <span className="font-medium text-slate-700">Name</span>
@@ -2371,13 +2997,6 @@ function ManagerOversightPage() {
                   </label>
                 ))}
               </div>
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">Status</span>
-              <select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value }))} className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-                <option value="Active">Active</option>
-                <option value="Disabled">Disabled</option>
-              </select>
             </label>
             <div className="md:col-span-2 flex flex-wrap gap-3">
               <button onClick={() => void saveManager()} disabled={submitting === editor.id} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
@@ -2415,7 +3034,7 @@ function ManagerDetailPage() {
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Assigned Plants" value={assignedPlantsList.length} hint="Plants this manager can access." icon={Building2} tone="blue" />
           <MetricCard label="Uploaded Documents" value={ownedDocuments.length} hint="Documents uploaded by this manager." icon={FileText} tone="amber" />
-          <MetricCard label="Status" value={target.status} hint="Current login and access state." icon={ShieldCheck} tone={target.status === "Active" ? "teal" : "rose"} />
+          <MetricCard label="Scoped Documents" value={scopedDocuments.length} hint="Documents visible inside this manager's assigned plant scope." icon={ShieldCheck} tone="teal" />
         </div>
         <div className="mt-6 grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
           <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
@@ -2433,7 +3052,7 @@ function ManagerDetailPage() {
               {assignedPlantsList.map((plant) => (
                 <div key={plant.id} className="rounded-3xl bg-slate-50 p-4">
                   <div className="font-semibold text-slate-900">{plant.name}</div>
-                  <div className="mt-1 text-sm text-slate-500">{plant.status}</div>
+                  <div className="mt-1 text-sm text-slate-500">{plant.location || plant.company || "Assigned plant workspace"}</div>
                 </div>
               ))}
               {!assignedPlantsList.length ? <div className="rounded-3xl bg-slate-50 p-4 text-sm text-slate-500">No plants assigned.</div> : null}
@@ -2448,7 +3067,8 @@ function ManagerDetailPage() {
                 <tr className="text-left text-sm text-slate-500">
                   <th className="px-4 py-3 font-medium">Document</th>
                   <th className="px-4 py-3 font-medium">Plant</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Project</th>
+                  <th className="px-4 py-3 font-medium">Uploaded</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white text-sm">
@@ -2456,7 +3076,8 @@ function ManagerDetailPage() {
                   <tr key={document.id}>
                     <td className="px-4 py-4 font-medium text-slate-900">{document.name}</td>
                     <td className="px-4 py-4 text-slate-600">{document.plant}</td>
-                    <td className="px-4 py-4 text-slate-600">{document.status}</td>
+                    <td className="px-4 py-4 text-slate-600">{document.projectName || "-"}</td>
+                    <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2909,6 +3530,8 @@ function AdminSessionsPage() {
   const { portalState, setSessionPolicyValue } = usePortal();
   const policy = portalState.sessionPolicy;
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [outsideHoursSessions, setOutsideHoursSessions] = useState<SessionRecord[]>([]);
+  const [outsideHoursAttempts, setOutsideHoursAttempts] = useState<OutsideHoursAttempt[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionError, setSessionError] = useState("");
 
@@ -2917,6 +3540,8 @@ function AdminSessionsPage() {
       .listSessions()
       .then((result) => {
         setSessions(result.items);
+        setOutsideHoursSessions(result.outsideBusinessHours.sessions);
+        setOutsideHoursAttempts(result.outsideBusinessHours.blockedAttempts);
         setSessionError("");
       })
       .catch((error) => {
@@ -3024,6 +3649,7 @@ function AdminSessionsPage() {
                       <div className="mt-2 text-sm text-slate-900">
                         {session.revokedReason ? `Ended because ${session.revokedReason.replace(/_/g, " ")}.` : "No forced close reason recorded."}
                       </div>
+                      <div className="mt-1 text-xs text-slate-500">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div>
                       <div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div>
                     </div>
                   </div>
@@ -3032,6 +3658,67 @@ function AdminSessionsPage() {
                 </div>
               ))}
               {!sessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records are available yet.</div> : null}
+            </div>
+          </>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard title="Outside business hours logins" subtitle="Mining-manager sessions or blocked attempts that fell outside the configured business window">
+        {loadingSessions ? <div className="text-sm text-slate-500">Flagging outside-hours activity...</div> : null}
+        {!loadingSessions && !sessionError ? (
+          <>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Off-hours sessions" value={outsideHoursSessions.length} hint="Actual session records that started outside business hours." icon={Clock3} tone="amber" />
+              <MetricCard label="Blocked attempts" value={outsideHoursAttempts.length} hint="Off-hours sign-ins blocked before a session was established." icon={TriangleAlert} tone="rose" />
+              <MetricCard label="Observed people" value={new Set([...outsideHoursSessions.map((item) => item.userId), ...outsideHoursAttempts.map((item) => item.userId || item.userName)]).size} hint="Distinct identities involved in off-hours access." icon={Users} tone="blue" />
+              <MetricCard label="Observed IPs" value={new Set([...outsideHoursSessions.map((item) => item.clientIp), ...outsideHoursAttempts.map((item) => item.clientIp)]).size} hint="Network origins tied to outside-hours access." icon={Network} tone="teal" />
+            </div>
+
+            <div className="mt-6 grid gap-6 xl:grid-cols-2">
+              <div className="space-y-4">
+                <div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div>
+                {outsideHoursSessions.map((session) => (
+                  <div key={`outside-session-${session.sessionId}`} className="rounded-[28px] border border-amber-200 bg-amber-50/60 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
+                        <div className="mt-1 text-sm text-slate-500">{session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}</div>
+                      </div>
+                      <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">Flagged</div>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div></div>
+                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div></div>
+                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</div><div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div></div>
+                      <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device / browser</div><div className="mt-2 text-sm text-slate-900">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div><div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div></div>
+                    </div>
+                  </div>
+                ))}
+                {!outsideHoursSessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records currently fall outside business hours.</div> : null}
+              </div>
+
+              <div className="space-y-4">
+                <div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div>
+                {outsideHoursAttempts.map((attempt) => (
+                  <div key={`outside-attempt-${attempt.id}`} className="rounded-[28px] border border-rose-200 bg-rose-50/60 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-lg font-semibold text-slate-950">{attempt.userName || "Unknown user"}</div>
+                        <div className="mt-1 text-sm text-slate-500">{attempt.userRole || "Unknown role"}</div>
+                      </div>
+                      <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-800">Blocked</div>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{attempt.clientIp}</div></div>
+                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Attempt time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(attempt.occurredAt)}</div></div>
+                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device</div><div className="mt-2 text-sm text-slate-900">{attempt.device || "Unknown device"}</div></div>
+                      <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Browser</div><div className="mt-2 text-sm text-slate-900">{attempt.browser || "Unknown browser"}</div></div>
+                    </div>
+                    <div className="mt-3 text-xs text-slate-500 break-all">{attempt.userAgent || "User agent not available"}</div>
+                  </div>
+                ))}
+                {!outsideHoursAttempts.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No blocked outside-hours attempts have been captured yet.</div> : null}
+              </div>
             </div>
           </>
         ) : null}
@@ -3084,6 +3771,13 @@ function NotFoundCard({ title, body }: { title: string; body: string }) {
 function AppContent() {
   const { user, loading, logout } = useAuth();
 
+  useEffect(() => {
+    if (loading || user) return;
+    if (window.location.pathname !== "/login") {
+      window.history.replaceState({}, "", "/login");
+    }
+  }, [loading, user]);
+
   const router = useMemo(() => {
     if (!user) return null;
     return createBrowserRouter([
@@ -3096,6 +3790,7 @@ function AppContent() {
         ),
         children: [
           { index: true, element: <Navigate to={defaultHome(user.role)} replace /> },
+          { path: "login", element: <Navigate to={defaultHome(user.role)} replace /> },
           { path: "dashboard", element: <DashboardPage /> },
           { path: "plants", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantIndexPage /></RoleGate> },
           { path: "plants/:plantId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantProjectsPage /></RoleGate> },
@@ -3111,6 +3806,7 @@ function AppContent() {
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
           { path: "admin/users", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "admin/users/:userId", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
+          { path: "admin/master-data", element: <RoleGate allowed={["Admin"]} capability="canManageUsers"><AdminMasterDataPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
           { path: "admin/network", element: <RoleGate allowed={["Admin", "CEO"]} capability="canConfigureIp"><AdminNetworkPage /></RoleGate> },
           { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },

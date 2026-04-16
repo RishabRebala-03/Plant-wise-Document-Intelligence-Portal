@@ -68,8 +68,6 @@ export interface DocumentRecord {
   name: string;
   plant: string;
   plantId: string;
-  projectId?: string | null;
-  projectName?: string | null;
   category: string;
   uploadedBy: string;
   uploadedById: string;
@@ -85,20 +83,6 @@ export interface DocumentRecord {
   };
   createdAt?: string | null;
   updatedAt?: string | null;
-}
-
-export interface ProjectRecord {
-  id: string;
-  plantId: string;
-  plantName: string;
-  name: string;
-  code: string;
-  description: string;
-  owner: string;
-  status: "Active" | "At Risk" | "Planned" | "Closed";
-  createdAt: string | null;
-  dueDate: string | null;
-  documentIds: string[];
 }
 
 export interface NotificationItem {
@@ -122,6 +106,8 @@ export interface SessionRecord {
   userRole?: string | null;
   clientIp: string;
   userAgent?: string | null;
+  browser?: string | null;
+  device?: string | null;
   startedAt: string | null;
   lastSeenAt: string | null;
   endedAt: string | null;
@@ -129,6 +115,30 @@ export interface SessionRecord {
   idleSeconds: number;
   status: "Active" | "Ended";
   revokedReason?: string | null;
+}
+
+export interface OutsideHoursAttempt {
+  id: string;
+  userId?: string | null;
+  userName?: string | null;
+  userRole?: string | null;
+  clientIp: string;
+  occurredAt: string | null;
+  detail?: string | null;
+  browser?: string | null;
+  device?: string | null;
+  userAgent?: string | null;
+  status?: string | null;
+}
+
+export interface GovernancePolicy {
+  allowedUploadFormats: string[];
+  businessHours: {
+    timezone: string;
+    startHour: number;
+    endHour: number;
+    allowedDays: number[];
+  };
 }
 
 export interface Plant {

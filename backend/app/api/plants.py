@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, request
 
-from ..auth import current_user, require_auth
-from ..db import get_db
+from ..auth import current_user, require_auth, require_capability
+from ..db import get_db, next_public_id
+from ..security import record_audit_event
 from ..serializers import serialize_document, serialize_plant
-from ..utils import error_response, success_response
+from ..utils import error_response, parse_json_body, success_response, utc_now
 
 
 plants_bp = Blueprint("plants", __name__)
@@ -58,3 +59,84 @@ def get_plant(plant_id: str):
             "documents": [serialize_document(document, []) for document in documents],
         }
     )
+
+
+@plants_bp.post("/plants")
+@require_auth(["Admin"])
+@require_capability("canManageUsers")
+def create_plant():
+    db = get_db()
+    body = parse_json_body()
+    name = (body.get("name") or "").strip()
+    company = (body.get("company") or "").strip()
+    location = (body.get("location") or "").strip()
+    capacity = (body.get("capacity") or "").strip()
+    manager_name = (body.get("manager") or "").strip() or None
+
+    if not name or not company:
+        return error_response("Plant name and company are required", 400)
+    if db.plants.find_one({"name": name}):
+        return error_response("A plant with this name already exists", 409)
+
+    now = utc_now()
+    plant = {
+        "id": next_public_id("plants", "P"),
+        "name": name,
+        "company": company,
+        "documents_count": 0,
+        "last_upload_at": None,
+        "status": "Operational",
+        "capacity": capacity or None,
+        "location": location or None,
+        "manager_name": manager_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    db.plants.insert_one(plant)
+    record_audit_event("Plant Created", user=current_user(), resource_type="plant", resource_id=plant["id"], metadata={"plantName": name})
+    return success_response(serialize_plant(plant), 201)
+
+
+@plants_bp.patch("/plants/<plant_id>")
+@require_auth(["Admin"])
+@require_capability("canManageUsers")
+def update_plant(plant_id: str):
+    db = get_db()
+    body = parse_json_body()
+    plant = db.plants.find_one({"id": plant_id})
+    if not plant:
+        return error_response("Plant not found", 404)
+
+    updates = {}
+    for source, target in (("name", "name"), ("company", "company"), ("location", "location"), ("capacity", "capacity"), ("manager", "manager_name")):
+        if body.get(source) is not None:
+            updates[target] = body[source].strip() if isinstance(body[source], str) else body[source]
+    if not updates:
+        return error_response("No changes were supplied", 400)
+    if "name" in updates:
+        duplicate = db.plants.find_one({"name": updates["name"], "id": {"$ne": plant_id}})
+        if duplicate:
+            return error_response("A plant with this name already exists", 409)
+    updates["updated_at"] = utc_now()
+    db.plants.update_one({"id": plant_id}, {"$set": updates})
+    updated = db.plants.find_one({"id": plant_id})
+    if "name" in updates:
+        db.documents.update_many({"plant_id": plant_id}, {"$set": {"plant_name": updates["name"], "updated_at": updates["updated_at"]}})
+        db.users.update_many({"assigned_plant_ids": plant_id}, {"$set": {"updated_at": updates["updated_at"]}})
+    record_audit_event("Plant Updated", user=current_user(), resource_type="plant", resource_id=plant_id, metadata={"updatedFields": sorted(updates.keys())})
+    return success_response(serialize_plant(updated))
+
+
+@plants_bp.delete("/plants/<plant_id>")
+@require_auth(["Admin"])
+@require_capability("canManageUsers")
+def delete_plant(plant_id: str):
+    db = get_db()
+    plant = db.plants.find_one({"id": plant_id})
+    if not plant:
+        return error_response("Plant not found", 404)
+    if db.documents.count_documents({"plant_id": plant_id, "deleted_at": None}) > 0:
+        return error_response("Delete or move the plant's documents before removing it", 409)
+    db.plants.delete_one({"id": plant_id})
+    record_audit_event("Plant Deleted", user=current_user(), resource_type="plant", resource_id=plant_id, metadata={"plantName": plant.get("name")})
+    return success_response({"message": "Plant removed"})

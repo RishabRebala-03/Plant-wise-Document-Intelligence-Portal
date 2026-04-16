@@ -156,7 +156,6 @@ export function SettingsPage() {
               <div className="grid gap-3">
                 {[
                   ["new_document_upload", "New document upload alerts"],
-                  ["document_approval", "Document approval notifications"],
                   ["weekly_summary_report", "Weekly summary reports"],
                   ["system_alerts", "System alerts"],
                   ["ceo_note_added", "CEO note updates"],

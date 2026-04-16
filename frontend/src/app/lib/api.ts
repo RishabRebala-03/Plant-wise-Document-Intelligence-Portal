@@ -4,10 +4,11 @@ import type {
   CeoDashboardData,
   Comment,
   DocumentRecord,
+  GovernancePolicy,
   ManagerDashboardData,
   NotificationItem,
+  OutsideHoursAttempt,
   Plant,
-  ProjectRecord,
   SessionRecord,
   User,
 } from "./types";
@@ -293,14 +294,61 @@ export const plantsApi = {
     const data = await apiFetch<{ summary: Record<string, number>; items: Plant[] }>("/plants");
     return data;
   },
+  create(body: Record<string, unknown>) {
+    return apiFetch<Plant>("/plants", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  update(plantId: string, body: Record<string, unknown>) {
+    return apiFetch<Plant>(`/plants/${plantId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  remove(plantId: string) {
+    return apiFetch<{ message: string }>(`/plants/${plantId}`, {
+      method: "DELETE",
+    });
+  },
 };
 
 export const projectsApi = {
   list() {
-    return apiFetch<{ items: ProjectRecord[] }>("/projects");
+    return apiFetch<{
+      items: Array<{
+        id: string;
+        plantId: string;
+        plantName: string;
+        name: string;
+        code: string;
+        description: string;
+        owner: string;
+        status: string;
+        createdAt: string | null;
+        dueDate: string | null;
+        documentIds: string[];
+        source: string;
+      }>;
+    }>("/projects");
   },
   create(body: Record<string, unknown>) {
-    return apiFetch<ProjectRecord>("/projects", {
+    return apiFetch<{
+      id: string;
+      plantId: string;
+      plantName: string;
+      name: string;
+      code: string;
+      description: string;
+      owner: string;
+      status: string;
+      createdAt: string | null;
+      dueDate: string | null;
+      documentIds: string[];
+      source: string;
+    }>("/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -390,7 +438,17 @@ export const settingsApi = {
     return apiFetch<{ items: Array<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }> }>("/settings/ip-rules");
   },
   listSessions() {
-    return apiFetch<{ items: SessionRecord[] }>("/settings/sessions");
+    return apiFetch<{ items: SessionRecord[]; outsideBusinessHours: { sessions: SessionRecord[]; blockedAttempts: OutsideHoursAttempt[] } }>("/settings/sessions");
+  },
+  getGovernancePolicy() {
+    return apiFetch<GovernancePolicy>("/settings/governance-policy");
+  },
+  updateGovernancePolicy(body: GovernancePolicy) {
+    return apiFetch<GovernancePolicy>("/settings/governance-policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
   },
   listAccessRules() {
     return apiFetch<{

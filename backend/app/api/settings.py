@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import ipaddress
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint
 
 from ..auth import current_user, hash_password, require_auth, require_capability, verify_password
 from ..db import get_db, next_public_id
 from ..permissions import DEFAULT_ACCESS_RULES, get_access_rules, save_access_rules
-from ..security import record_audit_event
+from ..security import (
+    DEFAULT_BUSINESS_HOURS,
+    DEFAULT_UPLOAD_FORMATS,
+    current_business_hours,
+    get_governance_policy,
+    record_audit_event,
+    save_governance_policy,
+)
 from ..serializers import serialize_user
 from ..utils import ensure_utc, error_response, parse_json_body, success_response, to_iso, utc_now
 
@@ -81,6 +89,8 @@ def _serialize_session(session: dict, user: dict | None = None) -> dict:
         "userRole": user.get("role") if user else None,
         "clientIp": session.get("client_ip") or "unknown",
         "userAgent": session.get("user_agent") or "",
+        "browser": _browser_label(session.get("user_agent") or ""),
+        "device": _device_label(session.get("user_agent") or ""),
         "startedAt": to_iso(started_at),
         "lastSeenAt": to_iso(last_seen_at),
         "endedAt": to_iso(revoked_at),
@@ -89,6 +99,84 @@ def _serialize_session(session: dict, user: dict | None = None) -> dict:
         "status": "Active" if not revoked_at else "Ended",
         "revokedReason": session.get("revoked_reason"),
     }
+
+
+def _serialize_governance_policy(policy: dict) -> dict:
+    business_hours = policy.get("businessHours") if isinstance(policy.get("businessHours"), dict) else {}
+    allowed_upload_formats = policy.get("allowedUploadFormats") if isinstance(policy.get("allowedUploadFormats"), list) else []
+    return {
+        "allowedUploadFormats": [str(value).strip().lower() for value in (allowed_upload_formats or DEFAULT_UPLOAD_FORMATS) if str(value).strip()],
+        "businessHours": {
+            "timezone": str(business_hours.get("timezone") or DEFAULT_BUSINESS_HOURS["timezone"]),
+            "startHour": int(business_hours.get("startHour", DEFAULT_BUSINESS_HOURS["startHour"])),
+            "endHour": int(business_hours.get("endHour", DEFAULT_BUSINESS_HOURS["endHour"])),
+            "allowedDays": [int(day) for day in (business_hours.get("allowedDays") or DEFAULT_BUSINESS_HOURS["allowedDays"])],
+        },
+    }
+
+
+def _outside_business_hours(session: dict) -> bool:
+    started_at = ensure_utc(session.get("created_at"))
+    if not started_at:
+        return False
+    business_hours = current_business_hours()
+    try:
+        localized = started_at.astimezone(ZoneInfo(str(business_hours.get("timezone") or DEFAULT_BUSINESS_HOURS["timezone"])))
+    except Exception:
+        return False
+    allowed_days = [int(day) for day in (business_hours.get("allowedDays") or DEFAULT_BUSINESS_HOURS["allowedDays"])]
+    start_hour = int(business_hours.get("startHour", DEFAULT_BUSINESS_HOURS["startHour"]))
+    end_hour = int(business_hours.get("endHour", DEFAULT_BUSINESS_HOURS["endHour"]))
+    return localized.weekday() not in allowed_days or not (start_hour <= localized.hour < end_hour)
+
+
+def _serialize_outside_hours_event(audit_log: dict) -> dict:
+    device = audit_log.get("device") or {}
+    user_agent = str(device.get("userAgent") or "")
+    metadata = audit_log.get("metadata") or {}
+    return {
+        "id": audit_log.get("id"),
+        "userId": audit_log.get("user_id"),
+        "userName": audit_log.get("user_name"),
+        "userRole": audit_log.get("user_role"),
+        "clientIp": audit_log.get("client_ip") or metadata.get("clientIp") or "unknown",
+        "occurredAt": to_iso(audit_log.get("created_at")),
+        "detail": audit_log.get("action"),
+        "browser": _browser_label(user_agent),
+        "device": _device_label(user_agent),
+        "userAgent": user_agent,
+        "status": audit_log.get("status"),
+    }
+
+
+def _browser_label(user_agent: str) -> str:
+    value = user_agent.lower()
+    if "edg/" in value:
+        return "Edge"
+    if "chrome/" in value and "edg/" not in value:
+        return "Chrome"
+    if "firefox/" in value:
+        return "Firefox"
+    if "safari/" in value and "chrome/" not in value:
+        return "Safari"
+    return "Unknown browser"
+
+
+def _device_label(user_agent: str) -> str:
+    value = user_agent.lower()
+    if "iphone" in value:
+        return "iPhone"
+    if "ipad" in value:
+        return "iPad"
+    if "android" in value:
+        return "Android device"
+    if "mac os x" in value or "macintosh" in value:
+        return "Mac"
+    if "windows" in value:
+        return "Windows PC"
+    if "linux" in value:
+        return "Linux device"
+    return "Unknown device"
 
 
 @settings_bp.get("/settings/me")
@@ -288,12 +376,86 @@ def update_ip_rule(rule_id: str):
     return success_response(_serialize_ip_rule(updated))
 
 
+@settings_bp.get("/settings/governance-policy")
+@require_auth()
+def get_governance_settings():
+    return success_response(_serialize_governance_policy(get_governance_policy()))
+
+
+@settings_bp.put("/settings/governance-policy")
+@require_auth(["Admin"])
+@require_capability("canManageUsers")
+def update_governance_settings():
+    body = parse_json_body()
+    allowed_upload_formats = body.get("allowedUploadFormats")
+    business_hours = body.get("businessHours")
+    if not isinstance(allowed_upload_formats, list) or not allowed_upload_formats:
+        return error_response("At least one allowed upload format is required", 400)
+    sanitized_formats = []
+    for value in allowed_upload_formats:
+        extension = str(value).strip().lower().lstrip(".")
+        if extension not in DEFAULT_UPLOAD_FORMATS:
+            return error_response(f"Unsupported upload format: {value}", 400)
+        if extension not in sanitized_formats:
+            sanitized_formats.append(extension)
+    if not isinstance(business_hours, dict):
+        return error_response("Business hours are required", 400)
+    timezone = str(business_hours.get("timezone") or DEFAULT_BUSINESS_HOURS["timezone"]).strip()
+    start_hour = int(business_hours.get("startHour", DEFAULT_BUSINESS_HOURS["startHour"]))
+    end_hour = int(business_hours.get("endHour", DEFAULT_BUSINESS_HOURS["endHour"]))
+    allowed_days = business_hours.get("allowedDays")
+    if not isinstance(allowed_days, list) or not allowed_days:
+        return error_response("At least one business day must be selected", 400)
+    sanitized_days = sorted({int(day) for day in allowed_days if 0 <= int(day) <= 6})
+    if start_hour < 0 or start_hour > 23 or end_hour < 1 or end_hour > 24 or start_hour >= end_hour:
+        return error_response("Business hours must define a valid start and end window", 400)
+
+    policy = save_governance_policy(
+        allowed_upload_formats=sanitized_formats,
+        business_hours={
+            "timezone": timezone,
+            "startHour": start_hour,
+            "endHour": end_hour,
+            "allowedDays": sanitized_days,
+        },
+    )
+    _record_settings_activity(
+        "Governance Policy Updated",
+        current_user(),
+        allowedUploadFormats=sanitized_formats,
+        businessHours=policy["businessHours"],
+    )
+    record_audit_event(
+        "Governance Policy Updated",
+        user=current_user(),
+        resource_type="settings",
+        resource_id="governance_policy",
+        metadata={"allowedUploadFormats": sanitized_formats, "businessHours": policy["businessHours"]},
+    )
+    return success_response(_serialize_governance_policy(policy))
+
+
 @settings_bp.get("/settings/sessions")
 @require_auth(["Admin"])
 def list_sessions():
     db = get_db()
     sessions = []
+    outside_hours_sessions = []
     for session in db.active_sessions.find({}).sort("created_at", -1).limit(250):
         user = db.users.find_one({"id": session.get("user_id")})
-        sessions.append(_serialize_session(session, user))
-    return success_response({"items": sessions})
+        serialized = _serialize_session(session, user)
+        sessions.append(serialized)
+        if user and user.get("role") == "Mining Manager" and _outside_business_hours(session):
+            outside_hours_sessions.append(serialized)
+
+    blocked_off_hours = [
+        _serialize_outside_hours_event(item)
+        for item in db.audit_logs.find(
+            {
+                "action": "Login Rejected",
+                "metadata.reason": "outside_business_hours",
+            }
+        ).sort("created_at", -1).limit(100)
+    ]
+
+    return success_response({"items": sessions, "outsideBusinessHours": {"sessions": outside_hours_sessions, "blockedAttempts": blocked_off_hours}})

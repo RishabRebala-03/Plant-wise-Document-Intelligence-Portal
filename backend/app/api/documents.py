@@ -9,7 +9,7 @@ from werkzeug.utils import secure_filename
 from ..auth import current_user, require_auth
 from ..db import get_db, get_fs, next_public_id
 from ..permissions import user_has_capability
-from ..security import record_audit_event
+from ..security import allowed_upload_content_types, allowed_upload_extensions, record_audit_event
 from ..serializers import serialize_comment, serialize_document
 from ..utils import error_response, get_pagination, parse_bool, parse_json_body, success_response, utc_now
 
@@ -235,9 +235,9 @@ def _validate_uploaded_file(file) -> tuple[str, str] | None:
     content_type = (file.mimetype or "").lower()
     if not file_name:
         return None
-    if extension not in current_app.config["ALLOWED_UPLOAD_EXTENSIONS"]:
+    if extension not in allowed_upload_extensions():
         return None
-    if content_type not in current_app.config["ALLOWED_UPLOAD_CONTENT_TYPES"]:
+    if content_type not in allowed_upload_content_types():
         return None
     return file_name, content_type
 
@@ -375,10 +375,10 @@ def create_document():
     form = request.form.to_dict() if request.files or request.form else parse_json_body()
     plant_id = form.get("plantId") or form.get("plant_id")
     plant_name = form.get("plant") or form.get("plantName")
-    project_id = (form.get("projectId") or form.get("project_id") or "").strip()
     name = (form.get("name") or "").strip()
     category = (form.get("category") or "").strip()
     upload_comment = (form.get("uploadComment") or form.get("comments") or "").strip()
+    company = (form.get("company") or "Midwest Ltd").strip()
     status = (form.get("status") or "In Review").strip()
     _log_document_event(
         "info",
@@ -411,8 +411,6 @@ def create_document():
             documentName=name,
         )
         return error_response("Plant selection is required", 400)
-    if not project_id:
-        return error_response("Project selection is required", 400)
 
     plant = db.plants.find_one({"id": plant_id}) if plant_id else db.plants.find_one({"name": plant_name})
     if not plant:
@@ -436,10 +434,6 @@ def create_document():
             documentName=name,
         )
         return error_response("Managers can only upload documents for their assigned plant", 403)
-    company = (form.get("company") or plant.get("company") or "").strip()
-    project = db.projects.find_one({"id": project_id, "plant_id": plant["id"]})
-    if not project:
-        return error_response("Project not found for the selected plant", 404)
 
     file = request.files.get("file")
     file_storage_id = None
@@ -449,7 +443,8 @@ def create_document():
     if file and file.filename:
         validated = _validate_uploaded_file(file)
         if not validated:
-            return error_response("Unsupported file type. Allowed uploads are PDF, Office documents, and PNG/JPEG images.", 400)
+            allowed_formats = ", ".join(ext.upper() for ext in allowed_upload_extensions())
+            return error_response(f"Unsupported file type. Allowed uploads are: {allowed_formats}.", 400)
         safe_file_name, normalized_content_type = validated
         data = file.read()
         size_bytes = len(data)
@@ -502,8 +497,6 @@ def create_document():
         "name": name,
         "plant_id": plant["id"],
         "plant_name": plant["name"],
-        "project_id": project["id"],
-        "project_name": project["name"],
         "category": category,
         "company": company,
         "uploaded_by_id": user["id"],
@@ -533,10 +526,6 @@ def create_document():
         uploadCommentPresent=bool(upload_comment),
     )
     db.documents.insert_one(document)
-    db.projects.update_one(
-        {"id": project["id"]},
-        {"$addToSet": {"document_ids": document["id"]}, "$set": {"updated_at": now}},
-    )
     db.plants.update_one(
         {"id": plant["id"]},
         {"$inc": {"documents_count": 1}, "$set": {"last_upload_at": now, "updated_at": now}},
@@ -566,7 +555,7 @@ def create_document():
         user=user,
         resource_type="document",
         resource_id=document["id"],
-        metadata={"plantId": document["plant_id"], "projectId": document["project_id"], "status": document["status"], "version": document["version"]},
+        metadata={"plantId": document["plant_id"], "status": document["status"], "version": document["version"]},
     )
     return success_response(serialize_document(document, []), 201)
 
@@ -655,7 +644,8 @@ def update_document(document_id: str):
     if file and file.filename:
         validated = _validate_uploaded_file(file)
         if not validated:
-            return error_response("Unsupported file type. Allowed uploads are PDF, Office documents, and PNG/JPEG images.", 400)
+            allowed_formats = ", ".join(ext.upper() for ext in allowed_upload_extensions())
+            return error_response(f"Unsupported file type. Allowed uploads are: {allowed_formats}.", 400)
         safe_file_name, normalized_content_type = validated
         data = file.read()
         size_bytes = len(data)
@@ -780,11 +770,6 @@ def delete_document(document_id: str):
 
     now = utc_now()
     db.documents.update_one({"id": document_id}, {"$set": {"deleted_at": now, "updated_at": now}})
-    if document.get("project_id"):
-        db.projects.update_one(
-            {"id": document["project_id"]},
-            {"$pull": {"document_ids": document_id}, "$set": {"updated_at": now}},
-        )
     db.plants.update_one({"id": document["plant_id"]}, {"$inc": {"documents_count": -1}, "$set": {"updated_at": now}})
     _record_activity("Deleted", document, user, {"deletedAt": now.isoformat()})
     _log_document_event(
