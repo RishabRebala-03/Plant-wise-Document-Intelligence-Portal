@@ -11,6 +11,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask import current_app, g, request
 
 from .db import get_db
+from .permissions import user_has_capability
 from .security import build_request_fingerprint, fingerprint_hash, queue_security_alert, record_audit_event
 from .utils import error_response, utc_now
 
@@ -262,6 +263,22 @@ def require_auth(roles: list[str] | None = None):
             g.current_user = user
             g.access_token_payload = payload
             g.active_session = active_session
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
+def require_capability(capability: str):
+    def decorator(fn: Callable):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            user = current_user()
+            if not user:
+                return error_response("Authentication required", 401)
+            if not user_has_capability(user, capability, get_db()):
+                return error_response("You do not have permission to perform this action", 403)
             return fn(*args, **kwargs)
 
         return wrapped

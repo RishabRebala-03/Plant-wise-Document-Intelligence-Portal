@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, request
 
-from ..auth import hash_password, require_auth
+from ..auth import hash_password, require_auth, require_capability
 from ..db import get_db, next_public_id
 from ..serializers import serialize_user
 from ..utils import error_response, parse_json_body, success_response, utc_now
@@ -69,8 +69,10 @@ def _record_user_activity(action: str, actor: dict, target: dict, **metadata):
 
 @users_bp.get("/users")
 @require_auth(["Admin", "CEO"])
+@require_capability("canManageUsers")
 def list_users():
     db = get_db()
+    actor = _current_user()
     query = {}
     role = request.args.get("role", "").strip()
     status = request.args.get("status", "").strip()
@@ -84,12 +86,15 @@ def list_users():
         query["assigned_plant_ids"] = plant_id
     if q:
         query["$or"] = [{"name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
+    if actor["role"] == "CEO":
+        query["role"] = "Mining Manager"
     users = [serialize_user(user) for user in db.users.find(query).sort("name", 1)]
     return success_response(users)
 
 
 @users_bp.get("/users/<user_id>")
 @require_auth(["Admin", "CEO"])
+@require_capability("canManageUsers")
 def get_user(user_id: str):
     db = get_db()
     user = db.users.find_one({"id": user_id})
@@ -104,6 +109,7 @@ def get_user(user_id: str):
 
 @users_bp.post("/users")
 @require_auth(["Admin"])
+@require_capability("canManageUsers")
 def create_user():
     db = get_db()
     body = parse_json_body()
@@ -153,6 +159,7 @@ def create_user():
 
 @users_bp.patch("/users/<user_id>")
 @require_auth(["Admin", "CEO"])
+@require_capability("canManageUsers")
 def update_user(user_id: str):
     db = get_db()
     body = parse_json_body()
@@ -200,6 +207,7 @@ def update_user(user_id: str):
 
 @users_bp.post("/users/<user_id>/toggle-status")
 @require_auth(["Admin", "CEO"])
+@require_capability("canManageUsers")
 def toggle_user_status(user_id: str):
     db = get_db()
     user = db.users.find_one({"id": user_id})
@@ -218,6 +226,7 @@ def toggle_user_status(user_id: str):
 
 @users_bp.delete("/users/<user_id>")
 @require_auth(["Admin", "CEO"])
+@require_capability("canManageUsers")
 def delete_user(user_id: str):
     db = get_db()
     user = db.users.find_one({"id": user_id})

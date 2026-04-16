@@ -74,6 +74,15 @@ def evaluate_ip_rules(client_ip: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def ip_policy_message(reason: str | None, *, login: bool = False) -> str:
+    prefix = "Login blocked" if login else "Access denied"
+    if reason == "blocked":
+        return f"{prefix}: IP is blocked by policy."
+    if reason == "not_whitelisted":
+        return f"{prefix}: IP is not on the allowlist."
+    return f"{prefix}: network policy restriction."
+
+
 def is_business_hours_allowed(user: dict[str, Any]) -> bool:
     if user.get("role") != "Mining Manager":
         return True

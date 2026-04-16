@@ -374,6 +374,38 @@ export const settingsApi = {
   listIpRules() {
     return apiFetch<{ items: Array<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }> }>("/settings/ip-rules");
   },
+  listAccessRules() {
+    return apiFetch<{
+      items: Array<{
+        role: "CEO" | "Mining Manager" | "Admin";
+        plantsScope: string;
+        canCreateProjects: boolean;
+        canUploadDocuments: boolean;
+        canEditDocuments: boolean;
+        canDeleteDocuments: boolean;
+        canManageUsers: boolean;
+        canConfigureIp: boolean;
+      }>;
+    }>("/settings/access-rules");
+  },
+  updateAccessRules(body: Record<string, unknown>) {
+    return apiFetch<{
+      items: Array<{
+        role: "CEO" | "Mining Manager" | "Admin";
+        plantsScope: string;
+        canCreateProjects: boolean;
+        canUploadDocuments: boolean;
+        canEditDocuments: boolean;
+        canDeleteDocuments: boolean;
+        canManageUsers: boolean;
+        canConfigureIp: boolean;
+      }>;
+    }>("/settings/access-rules", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
   createIpRule(body: Record<string, unknown>) {
     return apiFetch<{ id: string; label: string; address: string; status: "Allowed" | "Blocked" | "Review"; lastUpdated: string | null }>("/settings/ip-rules", {
       method: "POST",

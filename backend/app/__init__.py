@@ -8,7 +8,7 @@ from flask_cors import CORS
 from .api import register_blueprints
 from .config import Config
 from .db import get_db, init_db
-from .security import evaluate_ip_rules, get_client_ip, queue_security_alert, record_audit_event
+from .security import evaluate_ip_rules, get_client_ip, ip_policy_message, queue_security_alert, record_audit_event
 from .seed_data import repair_demo_users, seed_demo_data
 from .utils import error_response, success_response, utc_now
 
@@ -65,7 +65,7 @@ def create_app() -> Flask:
             detail=f"Blocked {request.method} {request.path} from IP {client_ip}.",
             metadata={"clientIp": client_ip, "reason": reason, "path": request.path},
         )
-        return error_response("Access denied by network policy", 403)
+        return error_response(ip_policy_message(reason, login=request.path.endswith("/auth/login")), 403)
 
     @app.after_request
     def apply_security_headers(response):

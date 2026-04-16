@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import {
-  Search, Filter, Eye, Download, Trash2, X, ChevronDown,
+  Filter, Eye, Download, Trash2, X, ChevronDown,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
@@ -23,6 +23,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
   const [filterPlant, setFilterPlant] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const searchOptions = Array.from(new Set(documents.map((document) => document.name).filter((value) => value.trim()))).sort((a, b) => a.localeCompare(b));
 
   async function load(options?: { keepCurrentSelection?: boolean }) {
     const [docsResult, plantsResult] = await Promise.all([
@@ -145,14 +146,18 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
 
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#999]" />
-          <input
+          <select
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search documents..."
-            className="w-full h-9 pl-9 pr-8 border border-[#d9d9d9] bg-white text-[#333] placeholder-[#bbb] focus:border-[#0A6ED1] focus:outline-none"
+            className="w-full h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
             style={{ fontSize: 13 }}
-          />
+          >
+            <option value="">All documents</option>
+            {searchOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
         </div>
 
         <div className="relative">

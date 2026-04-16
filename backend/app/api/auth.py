@@ -7,7 +7,7 @@ from flask import Blueprint, current_app, request
 
 from ..auth import issue_tokens, register_active_session, require_auth, revoke_refresh_token, rotate_refresh_token, verify_password
 from ..db import get_db
-from ..security import evaluate_ip_rules, get_client_ip, is_business_hours_allowed, queue_security_alert, record_audit_event
+from ..security import evaluate_ip_rules, get_client_ip, ip_policy_message, is_business_hours_allowed, queue_security_alert, record_audit_event
 from ..serializers import serialize_user
 from ..utils import ensure_utc, error_response, parse_json_body, success_response, utc_now
 
@@ -129,7 +129,7 @@ def login():
             detail=f"Blocked login for {user['name']} from IP {client_ip}.",
             metadata={"userId": user["id"], "clientIp": client_ip, "reason": ip_reason},
         )
-        return error_response("Login is not allowed from this IP address", 403)
+        return error_response(ip_policy_message(ip_reason, login=True), 403)
     if not is_business_hours_allowed(user):
         record_audit_event(
             "Login Rejected",

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Clock3, Download, Eye, FileSpreadsheet, MessageSquare, Pencil, Search, Trash2, Upload, X } from "lucide-react";
+import { Clock3, Download, Eye, FileSpreadsheet, MessageSquare, Pencil, Trash2, Upload, X } from "lucide-react";
 import type { Activity } from "../lib/types";
 
 interface DetailedActivityLogProps {
@@ -229,25 +229,38 @@ function escapeHtml(value: string) {
 }
 
 export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
-  const [search, setSearch] = useState("");
+  const [focusFilter, setFocusFilter] = useState("");
   const [actionFilter, setActionFilter] = useState("");
 
+  const focusOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          activities.flatMap((activity) => [
+            activity.userName || "",
+            activity.documentName || "",
+            String(activity.metadata?.plantName || ""),
+          ]).filter((value) => value.trim()),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [activities],
+  );
+
   const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
     return activities.filter((activity) => {
-      const matchesSearch =
-        !needle ||
-        activity.action.toLowerCase().includes(needle) ||
-        (activity.documentName || "").toLowerCase().includes(needle) ||
-        (activity.userName || "").toLowerCase().includes(needle) ||
-        String(activity.metadata?.plantName || "").toLowerCase().includes(needle);
+      const matchesFocus =
+        !focusFilter ||
+        activity.action === focusFilter ||
+        (activity.documentName || "") === focusFilter ||
+        (activity.userName || "") === focusFilter ||
+        String(activity.metadata?.plantName || "") === focusFilter;
       const matchesAction =
         !actionFilter ||
         activity.action.toLowerCase() === actionFilter ||
         activity.action.toLowerCase().includes(actionFilter);
-      return matchesSearch && matchesAction;
+      return matchesFocus && matchesAction;
     });
-  }, [activities, actionFilter, search]);
+  }, [activities, actionFilter, focusFilter]);
 
   const grouped = useMemo(() => {
     const today = new Date().toDateString();
@@ -377,15 +390,16 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
       </div>
 
       <div className="mb-5 flex flex-wrap items-center gap-3 rounded-[28px] border border-white/70 bg-white/90 px-5 py-4 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur">
-        <div className="relative min-w-[240px] max-w-sm flex-1">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search logs"
-            className="h-11 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-sm text-slate-700 outline-none transition focus:border-teal-500"
-          />
-        </div>
+        <select
+          value={focusFilter}
+          onChange={(e) => setFocusFilter(e.target.value)}
+          className="h-11 min-w-[240px] max-w-sm flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-teal-500"
+        >
+          <option value="">All actors and records</option>
+          {focusOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
 
         {[
           { key: "", label: "All Types" },
@@ -410,11 +424,11 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
           </button>
         ))}
 
-        {(search || actionFilter) && (
+        {(focusFilter || actionFilter) && (
           <button
             type="button"
             onClick={() => {
-              setSearch("");
+              setFocusFilter("");
               setActionFilter("");
             }}
             className="inline-flex h-10 items-center gap-2 rounded-2xl border border-rose-200 px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50"

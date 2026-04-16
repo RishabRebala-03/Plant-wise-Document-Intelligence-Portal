@@ -4,8 +4,9 @@ import ipaddress
 
 from flask import Blueprint
 
-from ..auth import current_user, hash_password, require_auth, verify_password
+from ..auth import current_user, hash_password, require_auth, require_capability, verify_password
 from ..db import get_db, next_public_id
+from ..permissions import DEFAULT_ACCESS_RULES, get_access_rules, save_access_rules
 from ..security import record_audit_event
 from ..serializers import serialize_user
 from ..utils import error_response, parse_json_body, success_response, utc_now
@@ -49,6 +50,20 @@ def _validate_ip_rule_address(address: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _serialize_access_rule(rule: dict) -> dict:
+    fallback = next((item for item in DEFAULT_ACCESS_RULES if item["role"] == rule.get("role")), {"plantsScope": "Controlled by administrator"})
+    return {
+        "role": rule.get("role"),
+        "plantsScope": rule.get("plantsScope", fallback["plantsScope"]),
+        "canCreateProjects": bool(rule.get("canCreateProjects")),
+        "canUploadDocuments": bool(rule.get("canUploadDocuments")),
+        "canEditDocuments": bool(rule.get("canEditDocuments")),
+        "canDeleteDocuments": bool(rule.get("canDeleteDocuments")),
+        "canManageUsers": bool(rule.get("canManageUsers")),
+        "canConfigureIp": bool(rule.get("canConfigureIp")),
+    }
 
 
 @settings_bp.get("/settings/me")
@@ -137,8 +152,52 @@ def update_password():
     return success_response(serialize_user(updated))
 
 
-@settings_bp.get("/settings/ip-rules")
+@settings_bp.get("/settings/access-rules")
+@require_auth()
+def list_access_rules():
+    rules = [_serialize_access_rule(rule) for rule in get_access_rules(get_db())]
+    return success_response({"items": rules})
+
+
+@settings_bp.put("/settings/access-rules")
 @require_auth(["Admin"])
+@require_capability("canManageUsers")
+def update_access_rules():
+    body = parse_json_body()
+    rules = body.get("rules")
+    if not isinstance(rules, list) or not rules:
+        return error_response("Access rules payload is required", 400)
+
+    valid_roles = {rule["role"] for rule in DEFAULT_ACCESS_RULES}
+    seen_roles = set()
+    sanitized = []
+    for item in rules:
+        if not isinstance(item, dict):
+            return error_response("Each access rule must be an object", 400)
+        role = item.get("role")
+        if role not in valid_roles or role in seen_roles:
+            return error_response("Access rules must include each role exactly once", 400)
+        seen_roles.add(role)
+        sanitized.append(_serialize_access_rule(item))
+
+    if seen_roles != valid_roles:
+        return error_response("Access rules must define CEO, Mining Manager, and Admin", 400)
+
+    save_access_rules(get_db(), sanitized)
+    _record_settings_activity("Access Rules Updated", current_user(), roles=sorted(seen_roles))
+    record_audit_event(
+        "Access Rules Updated",
+        user=current_user(),
+        resource_type="settings",
+        resource_id="access_rules",
+        metadata={"roles": sorted(seen_roles)},
+    )
+    return success_response({"items": sanitized})
+
+
+@settings_bp.get("/settings/ip-rules")
+@require_auth(["Admin", "CEO"])
+@require_capability("canConfigureIp")
 def list_ip_rules():
     db = get_db()
     rules = [_serialize_ip_rule(rule) for rule in db.ip_rules.find({}).sort("label", 1)]
@@ -146,7 +205,8 @@ def list_ip_rules():
 
 
 @settings_bp.post("/settings/ip-rules")
-@require_auth(["Admin"])
+@require_auth(["Admin", "CEO"])
+@require_capability("canConfigureIp")
 def create_ip_rule():
     db = get_db()
     body = parse_json_body()
@@ -175,7 +235,8 @@ def create_ip_rule():
 
 
 @settings_bp.patch("/settings/ip-rules/<rule_id>")
-@require_auth(["Admin"])
+@require_auth(["Admin", "CEO"])
+@require_capability("canConfigureIp")
 def update_ip_rule(rule_id: str):
     db = get_db()
     body = parse_json_body()

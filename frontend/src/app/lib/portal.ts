@@ -51,6 +51,14 @@ export interface PortalState {
   projectAssignments: Record<string, string>;
 }
 
+export type AccessCapability =
+  | "canCreateProjects"
+  | "canUploadDocuments"
+  | "canEditDocuments"
+  | "canDeleteDocuments"
+  | "canManageUsers"
+  | "canConfigureIp";
+
 export interface EnrichedDocument extends DocumentRecord {
   projectId: string;
   projectName: string;
@@ -61,7 +69,7 @@ export interface EnrichedDocument extends DocumentRecord {
 
 type LocalProjectDraft = Omit<ProjectRecord, "source">;
 
-const PORTAL_STATE_KEY = "midwest.portalState";
+export const PORTAL_STATE_KEY = "midwest.portalState";
 
 const PROJECT_TEMPLATES: Array<{
   id: string;
@@ -250,6 +258,14 @@ export function updateAccessRules(state: PortalState, accessRules: AccessRule[])
     ...state,
     accessRules,
   };
+}
+
+export function getAccessRuleForRole(accessRules: AccessRule[], role: UserRole) {
+  return accessRules.find((rule) => rule.role === role) || null;
+}
+
+export function hasAccessCapability(rule: AccessRule | null, capability: AccessCapability) {
+  return Boolean(rule?.[capability]);
 }
 
 export function updateIpRules(state: PortalState, ipRules: IpRule[]) {

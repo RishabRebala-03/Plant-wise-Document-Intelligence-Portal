@@ -13,6 +13,24 @@ export interface User {
   assignedPlantIds?: string[];
   assignedPlants?: string[];
   notificationPreferences?: Record<string, boolean>;
+  accessRule?: {
+    role?: UserRole;
+    plantsScope?: string;
+    canCreateProjects?: boolean;
+    canUploadDocuments?: boolean;
+    canEditDocuments?: boolean;
+    canDeleteDocuments?: boolean;
+    canManageUsers?: boolean;
+    canConfigureIp?: boolean;
+  };
+  capabilities?: {
+    canCreateProjects?: boolean;
+    canUploadDocuments?: boolean;
+    canEditDocuments?: boolean;
+    canDeleteDocuments?: boolean;
+    canManageUsers?: boolean;
+    canConfigureIp?: boolean;
+  };
   displayPreferences?: {
     table_density?: string;
     language?: string;
@@ -140,4 +158,3 @@ export interface AnalyticsData {
   topUploaders: { name: string; docs: number; plants: string }[];
   plantVolume: { id: string; name: string; documents: number; lastUpload: string | null }[];
 }
-

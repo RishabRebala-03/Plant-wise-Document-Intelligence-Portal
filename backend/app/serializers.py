@@ -3,10 +3,15 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from .permissions import get_access_rule_for_role, user_capabilities
 from .utils import serialize_object_id, to_iso
 
 
 def serialize_user(user: dict[str, Any]) -> dict[str, Any]:
+    from .db import get_db
+
+    db = get_db()
+    access_rule = get_access_rule_for_role(db, user["role"])
     return {
         "id": user["id"],
         "name": user["name"],
@@ -21,6 +26,8 @@ def serialize_user(user: dict[str, Any]) -> dict[str, Any]:
         "assignedPlants": user.get("assigned_plant_names", [user.get("plant_name")] if user.get("plant_name") and user.get("plant_name") != "All" else []),
         "notificationPreferences": user.get("notification_preferences", {}),
         "displayPreferences": user.get("display_preferences", {}),
+        "accessRule": access_rule,
+        "capabilities": user_capabilities(user, db),
         "security": {
             "twoFactorEnabled": user.get("security", {}).get("two_factor_enabled", False),
             "lastPasswordChangeAt": to_iso(user.get("security", {}).get("last_password_change_at")),

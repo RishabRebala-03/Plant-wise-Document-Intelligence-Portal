@@ -73,7 +73,10 @@ import {
   defaultPortalState,
   enrichDocuments,
   formatRole,
+  getAccessRuleForRole,
+  hasAccessCapability,
   lockManagerDocument,
+  PORTAL_STATE_KEY,
   persistPortalState,
   readPortalState,
   summarizeByPlant,
@@ -82,6 +85,7 @@ import {
   updateSessionPolicy,
   withManagerLocks,
   type AccessRule,
+  type AccessCapability,
   type EnrichedDocument,
   type IpRule,
   type PortalState,
@@ -103,7 +107,7 @@ type PortalContextValue = {
   refreshData: () => Promise<void>;
   createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => ProjectRecord;
   markDocumentLocked: (documentId: string) => void;
-  setAccessRules: (rules: AccessRule[]) => void;
+  setAccessRules: (rules: AccessRule[]) => Promise<void>;
   setIpRules: (rules: IpRule[]) => void;
   setSessionPolicyValue: (policy: SessionPolicy) => void;
 };
@@ -121,6 +125,7 @@ type NavItem = {
   label: string;
   path: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
+  capability?: AccessCapability;
 };
 
 const PortalContext = createContext<PortalContextValue | null>(null);
@@ -134,6 +139,24 @@ function usePortal() {
     throw new Error("usePortal must be used inside PortalProvider");
   }
   return value;
+}
+
+function useRoleAccess() {
+  const { user, portalState } = usePortal();
+  const accessRule = useMemo(
+    () => (user.accessRule?.role ? user.accessRule as AccessRule : getAccessRuleForRole(portalState.accessRules, user.role)),
+    [portalState.accessRules, user.accessRule, user.role],
+  );
+
+  function can(capability: AccessCapability) {
+    if (user.role === "Admin") return true;
+    if (user.capabilities && capability in user.capabilities) {
+      return Boolean(user.capabilities[capability]);
+    }
+    return hasAccessCapability(accessRule, capability);
+  }
+
+  return { accessRule, can };
 }
 
 function formatDate(value?: string | null) {
@@ -161,6 +184,22 @@ function primaryPlantId(user: User) {
   return assignedPlantIds(user)[0] || user.plantId || "";
 }
 
+function scopedPlantIds(user: User, plants: Plant[]) {
+  if (user.role === "Admin") {
+    return plants.map((plant) => plant.id);
+  }
+  const assigned = assignedPlantIds(user);
+  if (assigned.length) return assigned;
+  if (user.role === "CEO") {
+    return plants.map((plant) => plant.id);
+  }
+  return user.plantId ? [user.plantId] : [];
+}
+
+function userHasScopedPlants(user: User) {
+  return user.role !== "Admin" && assignedPlantIds(user).length > 0;
+}
+
 function roleAllows(role: UserRole, allowed: UserRole[]) {
   return allowed.includes(role);
 }
@@ -178,11 +217,12 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
   const [loading, setLoading] = useState(true);
 
   async function loadAll() {
-    const [documentsResult, plantsResult, usersResult, notificationsResult] = await Promise.all([
+    const [documentsResult, plantsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
       documentsApi.list({ page: 1, pageSize: 500 }),
       plantsApi.list(),
       usersApi.list().catch(() => [] as User[]),
       notificationsApi.list().catch(() => emptyNotifications()),
+      settingsApi.listAccessRules().catch(() => ({ items: [] as AccessRule[] })),
     ]);
 
     setRawDocuments(documentsResult.items);
@@ -193,7 +233,7 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
       const next = readPortalState(plantsResult.items, documentsResult.items);
       return current.projects.length === 0 ? next : {
         ...next,
-        accessRules: current.accessRules,
+        accessRules: accessRulesResult.items.length ? accessRulesResult.items : next.accessRules,
         ipRules: current.ipRules,
         sessionPolicy: current.sessionPolicy,
         managerDocumentLocks: current.managerDocumentLocks,
@@ -234,18 +274,41 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     persistPortalState(portalState);
   }, [plants.length, portalState, rawDocuments.length]);
 
+  useEffect(() => {
+    function syncPortalState(event: StorageEvent) {
+      if (event.key !== PORTAL_STATE_KEY) return;
+      setPortalState(readPortalState(plants, rawDocuments));
+    }
+
+    window.addEventListener("storage", syncPortalState);
+    return () => window.removeEventListener("storage", syncPortalState);
+  }, [plants, rawDocuments]);
+
+  const visiblePlantIds = useMemo(() => new Set(scopedPlantIds(user, plants)), [plants, user]);
+  const scopedPlants = useMemo(
+    () => plants.filter((plant) => visiblePlantIds.has(plant.id)),
+    [plants, visiblePlantIds],
+  );
+  const scopedProjects = useMemo(
+    () => portalState.projects.filter((project) => visiblePlantIds.has(project.plantId)),
+    [portalState.projects, visiblePlantIds],
+  );
+  const scopedRawDocuments = useMemo(
+    () => rawDocuments.filter((document) => visiblePlantIds.has(document.plantId)),
+    [rawDocuments, visiblePlantIds],
+  );
   const documents = useMemo(() => {
-    const enriched = enrichDocuments(rawDocuments, portalState.projects, user, plants, portalState.projectAssignments);
+    const enriched = enrichDocuments(scopedRawDocuments, scopedProjects, user, scopedPlants, portalState.projectAssignments);
     return withManagerLocks(enriched, portalState, user);
-  }, [plants, portalState, rawDocuments, user]);
+  }, [portalState, scopedPlants, scopedProjects, scopedRawDocuments, user]);
 
   const value = useMemo<PortalContextValue>(() => ({
     user,
-    plants,
+    plants: scopedPlants,
     documents,
-    rawDocuments,
+    rawDocuments: scopedRawDocuments,
     users,
-    projects: portalState.projects,
+    projects: scopedProjects,
     notifications,
     portalState,
     loading,
@@ -262,10 +325,13 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     markDocumentLocked: (documentId) => {
       setPortalState((current) => lockManagerDocument(current, user.id, documentId));
     },
-    setAccessRules: (rules) => setPortalState((current) => updateAccessRules(current, rules)),
+    setAccessRules: async (rules) => {
+      const result = await settingsApi.updateAccessRules({ rules });
+      setPortalState((current) => updateAccessRules(current, result.items));
+    },
     setIpRules: (rules) => setPortalState((current) => updateIpRules(current, rules)),
     setSessionPolicyValue: (policy) => setPortalState((current) => updateSessionPolicy(current, policy)),
-  }), [documents, loading, notifications, plants, portalState, rawDocuments, user, users]);
+  }), [documents, loading, notifications, portalState, scopedPlants, scopedProjects, scopedRawDocuments, user, users]);
 
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>;
 }
@@ -357,9 +423,14 @@ function useSessionUi(user: User, logout: () => Promise<void>, policy: SessionPo
   };
 }
 
-function RoleGate({ allowed, children }: { allowed: UserRole[]; children: ReactNode }) {
-  const { user } = usePortal();
-  if (!roleAllows(user.role, allowed)) {
+function RoleGate({ allowed, capability, children }: { allowed?: UserRole[]; capability?: AccessCapability; children: ReactNode }) {
+  const { user, portalState } = usePortal();
+  const accessRule = getAccessRuleForRole(portalState.accessRules, user.role);
+
+  if (allowed && !roleAllows(user.role, allowed)) {
+    return <Navigate to={defaultHome(user.role)} replace />;
+  }
+  if (capability && !hasAccessCapability(accessRule, capability)) {
     return <Navigate to={defaultHome(user.role)} replace />;
   }
   return <>{children}</>;
@@ -435,22 +506,30 @@ function Breadcrumbs({ items }: { items: Array<{ label: string; to?: string }> }
 
 function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUiState }) {
   const { user, notifications, portalState } = usePortal();
+  const { can } = useRoleAccess();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const isCeo = user.role === "CEO";
 
-  const navGroups = useMemo(() => {
+  const navGroups = useMemo<NavItem[][]>(() => {
     const common: NavItem[] = [{ label: "Settings", path: user.role === "Admin" ? "/admin/settings" : "/settings", icon: Settings }];
     if (user.role === "CEO") {
+      const governance: NavItem[] = [];
+      if (can("canManageUsers")) {
+        governance.push({ label: "Manager Access", path: "/oversight", icon: UserCog, capability: "canManageUsers" });
+      }
+      if (can("canConfigureIp")) {
+        governance.push({ label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" });
+      }
       return [
         [
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
           { label: "Analytics", path: "/analytics", icon: LineChartIcon },
-          { label: "Manager Access", path: "/oversight", icon: UserCog },
           { label: "Audit Logs", path: "/activity-logs", icon: Clock3 },
+          ...governance,
         ],
         common,
       ];
@@ -461,8 +540,8 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
-          { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus },
-          { label: "Upload", path: "/upload", icon: Upload },
+          { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus, capability: "canCreateProjects" },
+          { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
         ],
         common,
       ];
@@ -470,15 +549,15 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
     return [
       [
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
-        { label: "Users", path: "/admin/users", icon: Users },
+        { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
-        { label: "IP Configuration", path: "/admin/network", icon: Network },
+        { label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" },
         { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
         { label: "Audit Logs", path: "/admin/activity-logs", icon: LineChartIcon },
       ],
       common,
     ];
-  }, [user]);
+  }, [can, user]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.12),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(91,115,139,0.10),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] text-slate-900">
@@ -611,7 +690,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
 
             {navGroups.map((group, index) => (
               <div key={index} className="space-y-1">
-                {group.map((item) => {
+                {group.filter((item) => !item.capability || can(item.capability)).map((item) => {
                   const active = location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(`${item.path}/`));
                   return (
                     <button
@@ -632,7 +711,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
               <div className="font-semibold text-slate-900">Role restrictions</div>
               <div className="mt-2">
-                {portalState.accessRules.find((rule) => rule.role === user.role)?.plantsScope || "Controlled by administrator"}
+                {user.accessRule?.plantsScope || portalState.accessRules.find((rule) => rule.role === user.role)?.plantsScope || "Controlled by administrator"}
               </div>
             </div>
           </div>
@@ -833,6 +912,7 @@ function CeoDashboardPage() {
 
 function ManagerDashboardPage() {
   const { user, documents, projects } = usePortal();
+  const { can } = useRoleAccess();
   const navigate = useNavigate();
   const allowedPlantIds = assignedPlantIds(user);
   const myProjects = projects.filter((project) => allowedPlantIds.includes(project.plantId));
@@ -855,9 +935,11 @@ function ManagerDashboardPage() {
             <button onClick={() => navigate(`/plants/${primaryPlantId(user)}`)} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
               Open plant workspace
             </button>
-            <button onClick={() => navigate("/upload")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
-              Upload a document
-            </button>
+            {can("canUploadDocuments") ? (
+              <button onClick={() => navigate("/upload")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
+                Upload a document
+              </button>
+            ) : null}
           </div>
         </div>
       </section>
@@ -866,7 +948,7 @@ function ManagerDashboardPage() {
         <MetricCard label="My Projects" value={myProjects.length} hint="Project spaces under your plant." icon={FolderKanban} onClick={() => navigate("/plants")} />
         <MetricCard label="My Documents" value={myDocuments.length} hint="Documents visible inside your plant scope." icon={FileText} tone="blue" onClick={() => navigate("/documents")} />
         <MetricCard label="Locked After Access" value={lockedDocuments.length} hint="Read-only items opened in this manager session." icon={Lock} tone="rose" onClick={() => navigate("/documents")} />
-        <MetricCard label="Upload Rights" value="Enabled" hint="Managers can upload but not edit or delete documents." icon={Upload} tone="amber" onClick={() => navigate("/upload")} />
+        <MetricCard label="Upload Rights" value={can("canUploadDocuments") ? "Enabled" : "Disabled"} hint="Managers can upload only when the live access rule permits it." icon={Upload} tone="amber" onClick={can("canUploadDocuments") ? () => navigate("/upload") : undefined} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
@@ -965,12 +1047,13 @@ function PlantIndexPage() {
 function PlantProjectsPage() {
   const { plantId } = useParams();
   const { user, plants, projects, documents } = usePortal();
+  const { can } = useRoleAccess();
   const navigate = useNavigate();
   const allowedPlantIds = assignedPlantIds(user);
   const plant = plants.find((item) => item.id === plantId);
   const plantProjects = projects.filter((project) => project.plantId === plantId);
   const plantDocuments = documents.filter((document) => document.plantId === plantId);
-  const canCreate = user.role === "Mining Manager" && allowedPlantIds.includes(plantId || "");
+  const canCreate = user.role === "Mining Manager" && allowedPlantIds.includes(plantId || "") && can("canCreateProjects");
 
   if (!plant) return <NotFoundCard title="Plant not found" body="The selected plant could not be located in the current workspace." />;
   if (user.role === "Mining Manager" && !allowedPlantIds.includes(plantId || "")) return <Navigate to={defaultHome(user.role)} replace />;
@@ -1023,6 +1106,7 @@ function PlantProjectsPage() {
 function ProjectCreatePage() {
   const { plantId } = useParams();
   const { user, plants, createProjectRecord } = usePortal();
+  const { can } = useRoleAccess();
   const navigate = useNavigate();
   const plant = plants.find((item) => item.id === plantId);
   const [name, setName] = useState("");
@@ -1030,7 +1114,7 @@ function ProjectCreatePage() {
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
 
-  if (user.role !== "Mining Manager" || !assignedPlantIds(user).includes(plantId || "")) {
+  if (user.role !== "Mining Manager" || !assignedPlantIds(user).includes(plantId || "") || !can("canCreateProjects")) {
     return <Navigate to={defaultHome(user.role)} replace />;
   }
   if (!plant) return <NotFoundCard title="Plant not found" body="A project can only be created inside a valid plant workspace." />;
@@ -1122,13 +1206,31 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     }
   }, [scopedPlantId, scopedProjectId, searchParams, user.role]);
 
+  const queryOptions = useMemo(
+    () => Array.from(new Set(documents.map((document) => document.name))).sort((a, b) => a.localeCompare(b)),
+    [documents],
+  );
+  const managerOptions = useMemo(
+    () => Array.from(new Set(documents.map((document) => document.managerName))).sort((a, b) => a.localeCompare(b)),
+    [documents],
+  );
+  const identifierOptions = useMemo(
+    () => Array.from(new Set(documents.map((document) => document.identifier))).sort((a, b) => a.localeCompare(b)),
+    [documents],
+  );
+  const dateOptions = useMemo(
+    () =>
+      Array.from(new Set(documents.map((document) => document.date).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b)),
+    [documents],
+  );
+
   const filtered = useMemo(() => documents.filter((document) => {
     const matchesPlant = !plantId || document.plantId === plantId;
     const matchesProject = !projectId || document.projectId === projectId;
     const matchesCategory = !category || document.category === category;
-    const matchesManager = !manager || document.managerName.toLowerCase().includes(manager.toLowerCase());
-    const matchesIdentifier = !identifier || document.identifier.toLowerCase().includes(identifier.toLowerCase());
-    const matchesQuery = !query || [document.name, document.plant, document.projectName, document.uploadedBy, document.category].join(" ").toLowerCase().includes(query.toLowerCase());
+    const matchesManager = !manager || document.managerName === manager;
+    const matchesIdentifier = !identifier || document.identifier === identifier;
+    const matchesQuery = !query || document.name === query;
     const matchesFrom = !dateFrom || Boolean(document.date && document.date >= dateFrom);
     const matchesTo = !dateTo || Boolean(document.date && document.date <= dateTo);
     return matchesPlant && matchesProject && matchesCategory && matchesManager && matchesIdentifier && matchesQuery && matchesFrom && matchesTo;
@@ -1151,13 +1253,28 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
       <SectionCard title={title} subtitle="Separate listing page with advanced search and structured filters">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <FilterField icon={Search} label="Search">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">All documents</option>
+              {queryOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
           </FilterField>
           <FilterField icon={Users} label="Manager">
-            <input value={manager} onChange={(event) => setManager(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={manager} onChange={(event) => setManager(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">All managers</option>
+              {managerOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
           </FilterField>
           <FilterField icon={FileText} label="Identifier">
-            <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={identifier} onChange={(event) => setIdentifier(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">All identifiers</option>
+              {identifierOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
           </FilterField>
           <FilterField icon={BarChart3} label="Category">
             <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
@@ -1184,10 +1301,20 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
             </select>
           </FilterField>
           <FilterField icon={Clock3} label="From date">
-            <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">Any start date</option>
+              {dateOptions.map((option) => (
+                <option key={`from-${option}`} value={option}>{formatDate(option)}</option>
+              ))}
+            </select>
           </FilterField>
           <FilterField icon={Clock3} label="To date">
-            <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <select value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+              <option value="">Any end date</option>
+              {dateOptions.map((option) => (
+                <option key={`to-${option}`} value={option}>{formatDate(option)}</option>
+              ))}
+            </select>
           </FilterField>
           <div className="flex items-end">
             <button
@@ -1747,6 +1874,7 @@ function AnalyticsPage() {
 
 function AdminDashboardPage() {
   const { users, documents, plants, portalState } = usePortal();
+  const { can } = useRoleAccess();
   const navigate = useNavigate();
   const disabledUsers = users.filter((candidate) => candidate.status !== "Active").length;
   const managerUsers = users.filter((candidate) => candidate.role === "Mining Manager");
@@ -1811,12 +1939,16 @@ function AdminDashboardPage() {
             </p>
           </div>
           <div className="grid min-w-[280px] gap-3 rounded-[28px] border border-white/10 bg-black/10 p-4 backdrop-blur">
-            <button onClick={() => navigate("/admin/users")} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-amber-50">
-              Manage users
-            </button>
-            <button onClick={() => navigate("/admin/network")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
-              Review IP rules
-            </button>
+            {can("canManageUsers") ? (
+              <button onClick={() => navigate("/admin/users")} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-amber-50">
+                Manage users
+              </button>
+            ) : null}
+            {can("canConfigureIp") ? (
+              <button onClick={() => navigate("/admin/network")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
+                Review IP rules
+              </button>
+            ) : null}
             <button onClick={() => navigate("/admin/activity-logs")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
               Open audit logs
             </button>
@@ -1825,10 +1957,10 @@ function AdminDashboardPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Users" value={users.length} hint="Registered user accounts in the system." icon={Users} onClick={() => navigate("/admin/users")} />
+        <MetricCard label="Users" value={users.length} hint="Registered user accounts in the system." icon={Users} onClick={can("canManageUsers") ? () => navigate("/admin/users") : undefined} />
         <MetricCard label="Plants" value={plants.length} hint="Plants covered by governance and audit policies." icon={Building2} tone="blue" onClick={() => navigate("/admin/access")} />
         <MetricCard label="Documents" value={documents.length} hint="Records available to govern and audit." icon={FileText} tone="amber" onClick={() => navigate("/admin/activity-logs")} />
-        <MetricCard label="IP Rules" value={portalState.ipRules.length} hint="Allow, block, and review network entries." icon={Network} tone="rose" onClick={() => navigate("/admin/network")} />
+        <MetricCard label="IP Rules" value={portalState.ipRules.length} hint="Allow, block, and review network entries." icon={Network} tone="rose" onClick={can("canConfigureIp") ? () => navigate("/admin/network") : undefined} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
@@ -1952,9 +2084,9 @@ function AdminDashboardPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        <AdminTile title="Manager oversight" body="Edit, remove, or inactivate manager accounts." to="/admin/users" icon={UserCog} />
+        {can("canManageUsers") ? <AdminTile title="Manager oversight" body="Edit, remove, or inactivate manager accounts." to="/admin/users" icon={UserCog} /> : null}
         <AdminTile title="Access control" body="Adjust frontend role visibility and privileged actions." to="/admin/access" icon={ShieldCheck} />
-        <AdminTile title="IP configuration" body="Maintain allowed, blocked, and review network addresses." to="/admin/network" icon={Globe} />
+        {can("canConfigureIp") ? <AdminTile title="IP configuration" body="Maintain allowed, blocked, and review network addresses." to="/admin/network" icon={Globe} /> : null}
         <AdminTile title="Session policies" body="Configure auto logout and concurrent session handling." to="/admin/sessions" icon={Clock3} />
       </div>
     </div>
@@ -1977,7 +2109,7 @@ function AdminTile({ title, body, to, icon: Icon }: { title: string; body: strin
 
 function ManagerOversightPage() {
   const { user, users, plants, refreshData } = usePortal();
-  const [search, setSearch] = useState("");
+  const [managerFilter, setManagerFilter] = useState("");
   const [plantFilter, setPlantFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [message, setMessage] = useState("");
@@ -1992,15 +2124,20 @@ function ManagerOversightPage() {
     [users],
   );
 
+  const managerOptions = useMemo(
+    () => managers.map((candidate) => candidate.name).sort((a, b) => a.localeCompare(b)),
+    [managers],
+  );
+
   const filtered = useMemo(
     () =>
       managers.filter((candidate) => {
-        const matchesSearch = !search || candidate.name.toLowerCase().includes(search.toLowerCase());
+        const matchesManager = !managerFilter || candidate.name === managerFilter;
         const matchesPlant = !plantFilter || candidate.assignedPlantIds?.includes(plantFilter);
         const matchesStatus = !statusFilter || candidate.status === statusFilter;
-        return matchesSearch && matchesPlant && matchesStatus;
+        return matchesManager && matchesPlant && matchesStatus;
       }),
-    [managers, plantFilter, search, statusFilter],
+    [managerFilter, managers, plantFilter, statusFilter],
   );
 
   function openEditor(target: User) {
@@ -2085,12 +2222,16 @@ function ManagerOversightPage() {
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder=""
+          <select
+            value={managerFilter}
+            onChange={(event) => setManagerFilter(event.target.value)}
             className="h-12 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-          />
+          >
+            <option value="">All managers</option>
+            {managerOptions.map((candidate) => (
+              <option key={candidate} value={candidate}>{candidate}</option>
+            ))}
+          </select>
           <select value={plantFilter} onChange={(event) => setPlantFilter(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
             <option value="">All plants</option>
             {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name}</option>)}
@@ -2299,10 +2440,21 @@ function ManagerDetailPage() {
 function AdminAccessPage() {
   const { portalState, setAccessRules, users, plants, refreshData } = usePortal();
   const [savingManagerId, setSavingManagerId] = useState<string | null>(null);
+  const [savingRules, setSavingRules] = useState(false);
+  const [rulesMessage, setRulesMessage] = useState("");
 
-  function updateRule(index: number, field: keyof AccessRule, value: string | boolean) {
+  async function updateRule(index: number, field: keyof AccessRule, value: string | boolean) {
     const next = portalState.accessRules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, [field]: value } : rule);
-    setAccessRules(next);
+    setSavingRules(true);
+    setRulesMessage("");
+    try {
+      await setAccessRules(next);
+      setRulesMessage("Access rules updated.");
+    } catch (error) {
+      setRulesMessage(error instanceof Error ? error.message : "Unable to update access rules.");
+    } finally {
+      setSavingRules(false);
+    }
   }
 
   async function togglePlantAssignment(manager: User, plantId: string, checked: boolean) {
@@ -2321,6 +2473,7 @@ function AdminAccessPage() {
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Access Control" }]} />
       <SectionCard title="Role-based access control" subtitle="Frontend restrictions by role">
+        {rulesMessage ? <div className={`mb-4 text-sm ${rulesMessage === "Access rules updated." ? "text-emerald-700" : "text-[#BB0000]"}`}>{rulesMessage}</div> : null}
         <div className="grid gap-4">
           {portalState.accessRules.map((rule, index) => (
             <div key={rule.role} className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
@@ -2329,18 +2482,18 @@ function AdminAccessPage() {
                   <div className="text-lg font-semibold text-slate-900">{formatRole(rule.role)}</div>
                   <div className="mt-1 text-sm text-slate-500">{rule.plantsScope}</div>
                 </div>
-                <select value={rule.plantsScope} onChange={(event) => updateRule(index, "plantsScope", event.target.value)} className="h-11 w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                <select value={rule.plantsScope} disabled={savingRules} onChange={(event) => void updateRule(index, "plantsScope", event.target.value)} className="h-11 w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 disabled:bg-slate-100">
                   <option value="All plants">All plants</option>
                   {plants.map((plant) => <option key={`${rule.role}-${plant.id}`} value={plant.name}>{plant.name}</option>)}
                 </select>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
-                <AccessToggle label="Create projects" checked={rule.canCreateProjects} onChange={(checked) => updateRule(index, "canCreateProjects", checked)} />
-                <AccessToggle label="Upload documents" checked={rule.canUploadDocuments} onChange={(checked) => updateRule(index, "canUploadDocuments", checked)} />
-                <AccessToggle label="Edit documents" checked={rule.canEditDocuments} onChange={(checked) => updateRule(index, "canEditDocuments", checked)} />
-                <AccessToggle label="Delete documents" checked={rule.canDeleteDocuments} onChange={(checked) => updateRule(index, "canDeleteDocuments", checked)} />
-                <AccessToggle label="Manage users" checked={rule.canManageUsers} onChange={(checked) => updateRule(index, "canManageUsers", checked)} />
-                <AccessToggle label="Configure IP" checked={rule.canConfigureIp} onChange={(checked) => updateRule(index, "canConfigureIp", checked)} />
+                <AccessToggle label="Create projects" checked={rule.canCreateProjects} disabled={savingRules} onChange={(checked) => void updateRule(index, "canCreateProjects", checked)} />
+                <AccessToggle label="Upload documents" checked={rule.canUploadDocuments} disabled={savingRules} onChange={(checked) => void updateRule(index, "canUploadDocuments", checked)} />
+                <AccessToggle label="Edit documents" checked={rule.canEditDocuments} disabled={savingRules} onChange={(checked) => void updateRule(index, "canEditDocuments", checked)} />
+                <AccessToggle label="Delete documents" checked={rule.canDeleteDocuments} disabled={savingRules} onChange={(checked) => void updateRule(index, "canDeleteDocuments", checked)} />
+                <AccessToggle label="Manage users" checked={rule.canManageUsers} disabled={savingRules} onChange={(checked) => void updateRule(index, "canManageUsers", checked)} />
+                <AccessToggle label="Configure IP" checked={rule.canConfigureIp} disabled={savingRules} onChange={(checked) => void updateRule(index, "canConfigureIp", checked)} />
               </div>
             </div>
           ))}
@@ -2382,23 +2535,59 @@ function AdminAccessPage() {
   );
 }
 
-function AccessToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void; }) {
+function AccessToggle({ label, checked, disabled = false, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void; }) {
   return (
-    <label className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+    <label className={`flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 ${disabled ? "opacity-60" : ""}`}>
       <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-teal-600" />
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-teal-600" />
     </label>
   );
 }
 
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function loginIp(activity: Activity) {
+  const raw = activity.metadata?.clientIp;
+  return typeof raw === "string" && raw.trim() ? raw : "Unknown IP";
+}
+
 function AdminNetworkPage() {
   const [rules, setRules] = useState<IpRule[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState({ label: "", address: "", status: "Allowed" as IpRule["status"] });
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [activityError, setActivityError] = useState("");
 
   useEffect(() => {
-    settingsApi.listIpRules().then((result) => setRules(result.items)).catch((err) => setMessage(err instanceof Error ? err.message : "Unable to load IP rules."));
+    setLoading(true);
+    Promise.all([
+      settingsApi.listIpRules(),
+      activitiesApi.list({ action: "Login" }),
+    ])
+      .then(([ruleResult, activityResult]) => {
+        setRules(ruleResult.items);
+        setActivities(activityResult.items);
+        setActivityError("");
+      })
+      .catch((err) => {
+        const nextMessage = err instanceof Error ? err.message : "Unable to load IP rules.";
+        setMessage(nextMessage);
+        setActivityError(nextMessage);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   async function updateRule(id: string, status: IpRule["status"]) {
@@ -2414,13 +2603,139 @@ function AdminNetworkPage() {
     setMessage("IP rule created successfully.");
   }
 
+  const loginActivities = useMemo(
+    () => activities.filter((activity) => activity.action === "Login"),
+    [activities],
+  );
+
+  const personaSummaries = useMemo(() => {
+    const grouped = new Map<string, {
+      id: string;
+      name: string;
+      role: string;
+      email: string;
+      total: number;
+      lastSeen: string | null;
+      ips: Set<string>;
+      events: Activity[];
+    }>();
+
+    loginActivities.forEach((activity) => {
+      const email = typeof activity.metadata?.email === "string" ? activity.metadata.email : "";
+      const key = activity.userId || email || activity.userName || activity.id;
+      const existing = grouped.get(key) || {
+        id: key,
+        name: activity.userName || "Unknown user",
+        role: typeof activity.metadata?.role === "string" ? activity.metadata.role : "Unknown role",
+        email,
+        total: 0,
+        lastSeen: activity.createdAt,
+        ips: new Set<string>(),
+        events: [],
+      };
+
+      existing.total += 1;
+      existing.lastSeen = !existing.lastSeen || (activity.createdAt && activity.createdAt > existing.lastSeen) ? activity.createdAt : existing.lastSeen;
+      existing.ips.add(loginIp(activity));
+      existing.events.push(activity);
+      grouped.set(key, existing);
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+  }, [loginActivities]);
+
+  const ipSummaries = useMemo(() => {
+    const grouped = new Map<string, {
+      ip: string;
+      total: number;
+      lastSeen: string | null;
+      personas: Set<string>;
+      roles: Set<string>;
+    }>();
+
+    loginActivities.forEach((activity) => {
+      const ip = loginIp(activity);
+      const existing = grouped.get(ip) || {
+        ip,
+        total: 0,
+        lastSeen: activity.createdAt,
+        personas: new Set<string>(),
+        roles: new Set<string>(),
+      };
+
+      existing.total += 1;
+      existing.lastSeen = !existing.lastSeen || (activity.createdAt && activity.createdAt > existing.lastSeen) ? activity.createdAt : existing.lastSeen;
+      existing.personas.add(activity.userName || "Unknown user");
+      existing.roles.add(typeof activity.metadata?.role === "string" ? activity.metadata.role : "Unknown role");
+      grouped.set(ip, existing);
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => b.total - a.total || (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+  }, [loginActivities]);
+
+  const latestLogin = loginActivities[0];
+  const uniqueIpCount = ipSummaries.length;
+  const allowedCount = rules.filter((rule) => rule.status === "Allowed").length;
+  const blockedCount = rules.filter((rule) => rule.status === "Blocked").length;
+  const reviewCount = rules.filter((rule) => rule.status === "Review").length;
+
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "IP Configuration" }]} />
+      <section className="overflow-hidden rounded-[32px] bg-[radial-gradient(circle_at_top_left,_rgba(125,211,252,0.22),_transparent_28%),linear-gradient(135deg,_#0b132b_0%,_#12355b_50%,_#0f766e_100%)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(2,6,23,0.28)]">
+        <div className="text-xs uppercase tracking-[0.26em] text-cyan-100/85">Network security command center</div>
+        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Identity, ingress, and IP posture in one admin view</h1>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-100/90">
+          Monitor which personas are signing in, where they are signing in from, and how those login patterns align with the IP controls configured for the portal.
+        </p>
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-[28px] border border-emerald-200/40 bg-[linear-gradient(180deg,_rgba(16,185,129,0.22),_rgba(6,78,59,0.3))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-sm">
+            <div className="mb-5 flex items-center justify-between">
+              <span className="text-sm font-medium text-emerald-50/90">Successful logins</span>
+              <div className="rounded-2xl bg-white/20 p-3 text-emerald-50">
+                <ShieldCheck size={18} />
+              </div>
+            </div>
+            <div className="text-4xl font-semibold tracking-tight text-white">{loginActivities.length}</div>
+            <div className="mt-3 text-sm leading-6 text-emerald-50/85">Recent authenticated sign-ins captured in activity telemetry.</div>
+          </div>
+          <div className="rounded-[28px] border border-sky-200/45 bg-[linear-gradient(180deg,_rgba(59,130,246,0.24),_rgba(15,23,42,0.26))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-sm">
+            <div className="mb-5 flex items-center justify-between">
+              <span className="text-sm font-medium text-sky-50/90">Observed personas</span>
+              <div className="rounded-2xl bg-white/20 p-3 text-sky-50">
+                <Users size={18} />
+              </div>
+            </div>
+            <div className="text-4xl font-semibold tracking-tight text-white">{personaSummaries.length}</div>
+            <div className="mt-3 text-sm leading-6 text-sky-50/85">Distinct users seen in the current login stream.</div>
+          </div>
+          <div className="rounded-[28px] border border-cyan-100/60 bg-[linear-gradient(180deg,_rgba(224,242,254,0.95),_rgba(186,230,253,0.86))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+            <div className="mb-5 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-700">Observed IPs</span>
+              <div className="rounded-2xl bg-white/80 p-3 text-sky-700">
+                <Globe size={18} />
+              </div>
+            </div>
+            <div className="text-4xl font-semibold tracking-tight text-slate-950">{uniqueIpCount}</div>
+            <div className="mt-3 text-sm leading-6 text-slate-700">Unique ingress points currently visible to admin monitoring.</div>
+          </div>
+          <div className="rounded-[28px] border border-white/65 bg-[linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(241,245,249,0.92))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]">
+            <div className="mb-5 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-600">Latest ingress</span>
+              <div className="rounded-2xl bg-slate-100 p-3 text-slate-700">
+                <Network size={18} />
+              </div>
+            </div>
+            <div className="text-4xl font-semibold tracking-tight text-slate-950">{latestLogin ? loginIp(latestLogin) : "-"}</div>
+            <div className="mt-3 text-sm leading-6 text-slate-600">{latestLogin ? `${latestLogin.userName || "Unknown user"} at ${formatDateTime(latestLogin.createdAt)}` : "No successful logins recorded yet."}</div>
+          </div>
+        </div>
+      </section>
+
       <SectionCard
         title="IP configuration"
         subtitle="Allow, block, and review network sources"
-        action={<button onClick={() => setShowCreate((current) => !current)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Create IP</button>}
+        action={<button onClick={() => setShowCreate((current) => !current)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Add new IP configuration</button>}
       >
         {message ? <div className="mb-4 text-sm text-emerald-700">{message}</div> : null}
         {showCreate ? (
@@ -2452,6 +2767,99 @@ function AdminNetworkPage() {
           ))}
         </div>
       </SectionCard>
+
+      <SectionCard title="Security operations overview" subtitle="At-a-glance posture across configured rules and observed sign-ins">
+        {loading ? <div className="text-sm text-slate-500">Loading network telemetry...</div> : null}
+        {!loading ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Allowed rules" value={allowedCount} hint="Ingress sources explicitly permitted by policy." icon={ShieldCheck} />
+            <MetricCard label="Blocked rules" value={blockedCount} hint="Known endpoints currently denied from platform access." icon={Lock} tone="rose" />
+            <MetricCard label="Review queue" value={reviewCount} hint="Addresses awaiting analyst disposition or follow-up." icon={TriangleAlert} tone="amber" />
+            <MetricCard label="Latest sign-in time" value={latestLogin ? formatDate(latestLogin.createdAt) : "-"} hint={latestLogin ? formatDateTime(latestLogin.createdAt) : "No login telemetry is available yet."} icon={Clock3} tone="blue" />
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
+        <SectionCard title="Persona login matrix" subtitle="Every persona with login count, IP spread, and latest observed sign-in">
+          {loading ? <div className="text-sm text-slate-500">Collecting persona login activity...</div> : null}
+          {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
+          {!loading && !activityError && personaSummaries.length === 0 ? <div className="text-sm text-slate-500">No successful login events have been recorded yet.</div> : null}
+          {!loading && !activityError ? (
+            <div className="space-y-4">
+              {personaSummaries.map((persona) => (
+                <div key={persona.id} className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,_#ffffff,_#f8fafc)] p-5 shadow-[0_14px_30px_rgba(15,23,42,0.05)]">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-950">{persona.name}</div>
+                      <div className="mt-1 text-sm text-slate-500">{persona.role}{persona.email ? ` • ${persona.email}` : ""}</div>
+                    </div>
+                    <div className="rounded-2xl bg-slate-950 px-4 py-2 text-right text-white">
+                      <div className="text-xs uppercase tracking-[0.22em] text-white/55">Login volume</div>
+                      <div className="mt-1 text-xl font-semibold">{persona.total}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Last seen</div>
+                      <div className="mt-2 text-sm font-medium text-slate-900">{formatDateTime(persona.lastSeen)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">IP footprint</div>
+                      <div className="mt-2 text-sm font-medium text-slate-900">{statLabel(persona.ips.size, "IP")}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Most recent source</div>
+                      <div className="mt-2 font-mono text-sm text-slate-900">{loginIp(persona.events[0])}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {Array.from(persona.ips).map((ip) => (
+                      <span key={`${persona.id}-${ip}`} className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-900">
+                        {ip}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </SectionCard>
+
+        <SectionCard title="Ingress watchlist" subtitle="IP-centric view of who is entering the platform and how often">
+          {loading ? <div className="text-sm text-slate-500">Building ingress watchlist...</div> : null}
+          {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
+          {!loading && !activityError && ipSummaries.length === 0 ? <div className="text-sm text-slate-500">No IP activity is available yet.</div> : null}
+          {!loading && !activityError ? (
+            <div className="space-y-4">
+              {ipSummaries.map((entry) => (
+                <div key={entry.ip} className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-mono text-base font-semibold text-slate-950">{entry.ip}</div>
+                      <div className="mt-1 text-sm text-slate-500">Last seen {formatDateTime(entry.lastSeen)}</div>
+                    </div>
+                    <div className="rounded-2xl bg-white px-3 py-2 text-right shadow-sm">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Logins</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-950">{entry.total}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Personas</div>
+                      <div className="mt-2 text-sm text-slate-900">{Array.from(entry.personas).join(", ")}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Roles</div>
+                      <div className="mt-2 text-sm text-slate-900">{Array.from(entry.roles).join(", ")}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </SectionCard>
+      </div>
     </div>
   );
 }
@@ -2553,20 +2961,20 @@ function AppContent() {
           { path: "dashboard", element: <DashboardPage /> },
           { path: "plants", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantIndexPage /></RoleGate> },
           { path: "plants/:plantId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantProjectsPage /></RoleGate> },
-          { path: "plants/:plantId/projects/new", element: <RoleGate allowed={["Mining Manager"]}><ProjectCreatePage /></RoleGate> },
+          { path: "plants/:plantId/projects/new", element: <RoleGate allowed={["Mining Manager"]} capability="canCreateProjects"><ProjectCreatePage /></RoleGate> },
           { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><ProjectDocumentsPage /></RoleGate> },
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentDetailPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
-          { path: "oversight", element: <RoleGate allowed={["CEO"]}><ManagerOversightPage /></RoleGate> },
-          { path: "oversight/:userId", element: <RoleGate allowed={["CEO"]}><ManagerDetailPage /></RoleGate> },
+          { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
+          { path: "oversight/:userId", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
           { path: "activity-logs", element: <RoleGate allowed={["CEO"]}><ActivityLogsPage /></RoleGate> },
-          { path: "upload", element: <RoleGate allowed={["Mining Manager"]}><ManagerUpload /></RoleGate> },
+          { path: "upload", element: <RoleGate allowed={["Mining Manager"]} capability="canUploadDocuments"><ManagerUpload /></RoleGate> },
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
-          { path: "admin/users", element: <RoleGate allowed={["Admin"]}><ManagerOversightPage /></RoleGate> },
-          { path: "admin/users/:userId", element: <RoleGate allowed={["Admin"]}><ManagerDetailPage /></RoleGate> },
+          { path: "admin/users", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
+          { path: "admin/users/:userId", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
-          { path: "admin/network", element: <RoleGate allowed={["Admin"]}><AdminNetworkPage /></RoleGate> },
+          { path: "admin/network", element: <RoleGate allowed={["Admin", "CEO"]} capability="canConfigureIp"><AdminNetworkPage /></RoleGate> },
           { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },
           { path: "admin/activity-logs", element: <RoleGate allowed={["Admin"]}><ActivityLogsPage /></RoleGate> },
           { path: "settings", element: <RoleGate allowed={["CEO", "Mining Manager"]}><SettingsPage /></RoleGate> },

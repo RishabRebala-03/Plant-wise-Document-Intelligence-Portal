@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 
 from ..auth import current_user, require_auth
 from ..db import get_db, get_fs, next_public_id
+from ..permissions import user_has_capability
 from ..security import record_audit_event
 from ..serializers import serialize_comment, serialize_document
 from ..utils import error_response, get_pagination, parse_bool, parse_json_body, success_response, utc_now
@@ -205,12 +206,20 @@ def _visible_comments(document_id: str, user: dict) -> list[dict]:
     return list(db.comments.find({"document_id": document_id, "visibility": "public"}).sort("created_at", -1))
 
 
-def _can_manage_document(user: dict, document: dict) -> bool:
-    if user["role"] in {"CEO", "Admin"}:
+def _can_edit_document(user: dict, document: dict) -> bool:
+    if user["role"] in {"CEO", "Admin"} and user_has_capability(user, "canEditDocuments", get_db()):
         return True
     if document.get("accessed_by"):
         return False
-    return document.get("uploaded_by_id") == user["id"]
+    return document.get("uploaded_by_id") == user["id"] and user_has_capability(user, "canEditDocuments", get_db())
+
+
+def _can_delete_document(user: dict, document: dict) -> bool:
+    if user["role"] in {"CEO", "Admin"} and user_has_capability(user, "canDeleteDocuments", get_db()):
+        return True
+    if document.get("accessed_by"):
+        return False
+    return document.get("uploaded_by_id") == user["id"] and user_has_capability(user, "canDeleteDocuments", get_db())
 
 
 def _can_view_document(user: dict, document: dict) -> bool:
@@ -360,6 +369,9 @@ def export_documents():
 def create_document():
     user = current_user()
     db = get_db()
+    if not user_has_capability(user, "canUploadDocuments", db):
+        return error_response("You do not have permission to upload documents", 403)
+
     form = request.form.to_dict() if request.files or request.form else parse_json_body()
     plant_id = form.get("plantId") or form.get("plant_id")
     plant_name = form.get("plant") or form.get("plantName")
@@ -578,12 +590,14 @@ def get_document(document_id: str):
 def update_document(document_id: str):
     user = current_user()
     db = get_db()
+    if not user_has_capability(user, "canEditDocuments", db):
+        return error_response("You do not have permission to update documents", 403)
     _log_document_event("info", "Document update request received", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
         _log_document_event("warning", "Document update failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
-    if not _can_manage_document(user, document):
+    if not _can_edit_document(user, document):
         _log_document_event(
             "warning",
             "Document update denied",
@@ -733,12 +747,14 @@ def update_document(document_id: str):
 def delete_document(document_id: str):
     user = current_user()
     db = get_db()
+    if not user_has_capability(user, "canDeleteDocuments", db):
+        return error_response("You do not have permission to delete documents", 403)
     _log_document_event("info", "Document delete request received", **_user_log_context(user), documentId=document_id)
     document = db.documents.find_one({"id": document_id, "deleted_at": None})
     if not document:
         _log_document_event("warning", "Document delete failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
-    if not _can_manage_document(user, document):
+    if not _can_delete_document(user, document):
         _log_document_event(
             "warning",
             "Document delete denied",
