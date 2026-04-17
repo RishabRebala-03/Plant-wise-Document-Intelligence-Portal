@@ -1474,13 +1474,22 @@ function DocumentDetailPage() {
 
   if (!document) return <NotFoundCard title="Document not found" body="This document is no longer available in the current filtered workspace." />;
 
-  return (
-    <div className="space-y-6">
-      <Breadcrumbs items={[
+  const breadcrumbs = user.role === "Admin"
+    ? [
+        { label: "Admin", to: "/admin" },
+        { label: "Users", to: "/admin/users" },
+        { label: document.uploadedBy, to: `/admin/users/${document.uploadedById}` },
+        { label: document.name },
+      ]
+    : [
         { label: "Documents", to: "/documents" },
         { label: document.projectName, to: `/plants/${document.plantId}/projects/${document.projectId}/documents` },
         { label: document.name },
-      ]} />
+      ];
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={breadcrumbs} />
 
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#334155)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.22)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -3109,6 +3118,7 @@ function ManagerOversightPage() {
 function ManagerDetailPage() {
   const { userId } = useParams();
   const { user, users, plants, documents } = usePortal();
+  const navigate = useNavigate();
   const target = users.find((candidate) => candidate.id === userId && candidate.role === "Mining Manager");
 
   if (!target) {
@@ -3167,7 +3177,14 @@ function ManagerDetailPage() {
               <tbody className="divide-y divide-slate-100 bg-white text-sm">
                 {scopedDocuments.slice(0, 8).map((document) => (
                   <tr key={document.id}>
-                    <td className="px-4 py-4 font-medium text-slate-900">{document.name}</td>
+                    <td className="px-4 py-4">
+                      <button
+                        onClick={() => navigate(`/documents/${document.id}`)}
+                        className="font-medium text-slate-900 transition hover:text-[#0A6ED1]"
+                      >
+                        {document.name}
+                      </button>
+                    </td>
                     <td className="px-4 py-4 text-slate-600">{document.plant}</td>
                     <td className="px-4 py-4 text-slate-600">{document.projectName || "-"}</td>
                     <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
@@ -3908,7 +3925,7 @@ function AppContent() {
           { path: "plants/:plantId/projects/new", element: <RoleGate allowed={["Mining Manager"]} capability="canCreateProjects"><ProjectCreatePage /></RoleGate> },
           { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><ProjectDocumentsPage /></RoleGate> },
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
-          { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentDetailPage /></RoleGate> },
+          { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentDetailPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "oversight/:userId", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
