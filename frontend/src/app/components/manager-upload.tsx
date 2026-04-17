@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { ArrowRight, Clock3, FileText, FolderKanban, Paperclip, Upload, UploadCloud } from "lucide-react";
+import { ArrowRight, Clock3, FileText, FolderKanban, Paperclip, TriangleAlert, Upload, UploadCloud } from "lucide-react";
 import { ApiError, LIVE_SYNC_INTERVAL_MS, categoryOptions, dashboardApi, documentsApi, plantsApi, settingsApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { DocumentRecord, GovernancePolicy, ManagerDashboardData, Plant } from "../lib/types";
@@ -9,6 +9,63 @@ import { DocumentDrawer } from "./document-drawer";
 
 function scopedPlantIds(user: { assignedPlantIds?: string[]; plantId?: string | null }) {
   return user.assignedPlantIds?.length ? user.assignedPlantIds : user.plantId ? [user.plantId] : [];
+}
+
+const BUSINESS_DAY_OPTIONS = [
+  { label: "Mon", value: 0 },
+  { label: "Tue", value: 1 },
+  { label: "Wed", value: 2 },
+  { label: "Thu", value: 3 },
+  { label: "Fri", value: 4 },
+  { label: "Sat", value: 5 },
+  { label: "Sun", value: 6 },
+];
+
+function getBusinessTimeParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    hour: "numeric",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const weekday = parts.find((part) => part.type === "weekday")?.value || "Mon";
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || "0");
+  return { weekday, hour };
+}
+
+function formatBusinessHour(value: number) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2020, 0, 1, value, 0)));
+}
+
+function describeBusinessHours(policy: GovernancePolicy) {
+  const dayLabels = BUSINESS_DAY_OPTIONS
+    .filter((day) => policy.businessHours.allowedDays.includes(day.value))
+    .map((day) => day.label)
+    .join(", ");
+  return `${dayLabels || "No active days"} • ${formatBusinessHour(policy.businessHours.startHour)} - ${formatBusinessHour(policy.businessHours.endHour)} • ${policy.businessHours.timezone}`;
+}
+
+function isWithinGovernanceBusinessHours(policy: GovernancePolicy, date = new Date()) {
+  const { weekday, hour } = getBusinessTimeParts(date, policy.businessHours.timezone);
+  const weekdayMap: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  const dayValue = weekdayMap[weekday] ?? 0;
+  const isAllowedDay = policy.businessHours.allowedDays.includes(dayValue);
+  if (!isAllowedDay) return false;
+  return hour >= policy.businessHours.startHour && hour < policy.businessHours.endHour;
 }
 
 export function ManagerUpload() {
@@ -44,6 +101,7 @@ export function ManagerUpload() {
   });
 
   const allowedPlantIds = useMemo(() => scopedPlantIds(user || {}), [user]);
+  const uploadAllowedNow = useMemo(() => isWithinGovernanceBusinessHours(governancePolicy), [governancePolicy]);
 
   async function load() {
     const [dashboard, plantsResult, documentsResult, governanceResult] = await Promise.all([
@@ -100,6 +158,13 @@ export function ManagerUpload() {
   );
 
   function handleSelectedFile(nextFile: File | null) {
+    if (!uploadAllowedNow) {
+      setMessage(`Uploads are only allowed during ${describeBusinessHours(governancePolicy)}.`);
+      setMessageType("error");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setFile(null);
+      return;
+    }
     if (nextFile) {
       const extension = nextFile.name.split(".").pop()?.toLowerCase() || "";
       if (!governancePolicy.allowedUploadFormats.includes(extension)) {
@@ -130,6 +195,17 @@ export function ManagerUpload() {
     }
     if (!file) {
       setMessage("Choose a file before submitting.");
+      setMessageType("error");
+      return;
+    }
+    if (!uploadAllowedNow) {
+      setMessage(`Uploads are only allowed during ${describeBusinessHours(governancePolicy)}.`);
+      setMessageType("error");
+      return;
+    }
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    if (!governancePolicy.allowedUploadFormats.includes(extension)) {
+      setMessage(`Only these file formats are allowed: ${governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ")}.`);
       setMessageType("error");
       return;
     }
@@ -255,13 +331,49 @@ export function ManagerUpload() {
             </div>
           </div>
 
+          <div className="mb-6 grid gap-3 md:grid-cols-2">
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Allowed formats</div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">
+                {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "No formats configured"}
+              </div>
+              <div className="mt-2 text-sm text-slate-500">Only these formats can be attached in this workspace.</div>
+            </div>
+            <div className={`rounded-[24px] border px-4 py-4 ${uploadAllowedNow ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/80"}`}>
+              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
+                <Clock3 size={14} />
+                Upload window
+              </div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">{describeBusinessHours(governancePolicy)}</div>
+              <div className={`mt-2 text-sm ${uploadAllowedNow ? "text-emerald-700" : "text-amber-800"}`}>
+                {uploadAllowedNow ? "Uploads are currently allowed." : "Uploads are currently blocked outside the configured business hours."}
+              </div>
+            </div>
+          </div>
+
+          {!uploadAllowedNow ? (
+            <div className="mb-6 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+              <span className="inline-flex items-center gap-2 font-semibold">
+                <TriangleAlert size={16} />
+                Uploads are locked right now
+              </span>
+              <div className="mt-2">
+                This manager workspace only accepts uploads during {describeBusinessHours(governancePolicy)}.
+              </div>
+            </div>
+          ) : null}
+
           <div
             role="button"
             tabIndex={0}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (!uploadAllowedNow) return;
+              fileInputRef.current?.click();
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
+                if (!uploadAllowedNow) return;
                 fileInputRef.current?.click();
               }
             }}
@@ -275,16 +387,33 @@ export function ManagerUpload() {
               setDragOver(false);
               handleSelectedFile(event.dataTransfer.files[0] || null);
             }}
-            className={`mb-6 rounded-[28px] border-2 border-dashed px-6 py-10 text-center transition ${dragOver ? "border-teal-500 bg-teal-50" : "border-slate-200 bg-slate-50"}`}
+            className={`mb-6 rounded-[28px] border-2 border-dashed px-6 py-10 text-center transition ${
+              !uploadAllowedNow
+                ? "cursor-not-allowed border-amber-200 bg-amber-50/70 opacity-80"
+                : dragOver
+                  ? "border-teal-500 bg-teal-50"
+                  : "border-slate-200 bg-slate-50"
+            }`}
           >
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-white shadow-sm">
-              <UploadCloud size={28} className={dragOver ? "text-teal-600" : "text-slate-500"} />
+              <UploadCloud size={28} className={!uploadAllowedNow ? "text-amber-600" : dragOver ? "text-teal-600" : "text-slate-500"} />
             </div>
-            <div className="mt-4 text-lg font-semibold text-slate-900">Drop a file here or browse from your device</div>
+            <div className="mt-4 text-lg font-semibold text-slate-900">
+              {uploadAllowedNow ? "Drop a file here or browse from your device" : "Upload window is currently closed"}
+            </div>
             <div className="mt-2 text-sm text-slate-500">
               Accepted formats: {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ")} up to 25 MB.
             </div>
-            <button type="button" onClick={(event) => { event.stopPropagation(); fileInputRef.current?.click(); }} className="mt-4 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            <button
+              type="button"
+              disabled={!uploadAllowedNow}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!uploadAllowedNow) return;
+                fileInputRef.current?.click();
+              }}
+              className="mt-4 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
               Choose document
             </button>
             {file ? (
@@ -345,7 +474,7 @@ export function ManagerUpload() {
               <input ref={fileInputRef} type="file" accept={acceptTypes} onChange={(event) => handleSelectedFile(event.target.files?.[0] || null)} className="hidden" />
             </div>
             <div className="md:col-span-2 flex flex-wrap items-center gap-3">
-              <button type="submit" disabled={submitting} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+              <button type="submit" disabled={submitting || !uploadAllowedNow} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
                 <Upload size={14} />
                 {submitting ? "Submitting..." : "Submit document"}
               </button>

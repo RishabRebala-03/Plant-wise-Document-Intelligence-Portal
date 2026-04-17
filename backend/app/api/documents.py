@@ -10,7 +10,7 @@ from ..auth import current_user, require_auth
 from ..db import get_db, get_fs, next_public_id
 from ..permissions import user_has_capability
 from ..security import allowed_upload_content_types, allowed_upload_extensions, record_audit_event
-from ..serializers import serialize_comment, serialize_document
+from ..serializers import serialize_comment, serialize_document, serialize_document_conversation
 from ..utils import error_response, get_pagination, parse_bool, parse_json_body, success_response, utc_now
 
 
@@ -130,6 +130,54 @@ def _create_manager_notifications_for_comment(
                 "document_id": document["id"],
                 "source_comment_id": source_comment_id,
                 "type": "ceo_comment",
+                "read": False,
+                "created_at": now,
+                "read_at": None,
+            }
+        )
+
+
+def _visible_conversations(document_id: str, user: dict) -> list[dict]:
+    db = get_db()
+    base_query = {"document_id": document_id}
+    if user["role"] in {"CEO", "Admin"}:
+        return list(db.document_conversations.find(base_query).sort("created_at", -1))
+
+    visibility_query = {
+        "$or": [
+            {"audience": "workspace"},
+            {"audience": "uploader", "$or": [{"author_id": user["id"]}, {"mention_ids": user["id"]}, {"document_uploader_id": user["id"]}]},
+        ]
+    }
+    return list(db.document_conversations.find({**base_query, **visibility_query}).sort("created_at", -1))
+
+
+def _create_notifications_for_conversation(document: dict, author: dict, message: dict):
+    db = get_db()
+    mention_ids = [value for value in message.get("mention_ids", []) if value and value != author["id"]]
+    recipient_ids = set(mention_ids)
+
+    if message.get("audience") == "uploader" and document.get("uploaded_by_id") and document.get("uploaded_by_id") != author["id"]:
+        recipient_ids.add(document["uploaded_by_id"])
+
+    now = message.get("created_at") or utc_now()
+    detail = f"{author['name']} mentioned you on {document['name']}: {message['text'][:80]}{'...' if len(message['text']) > 80 else ''}"
+    for recipient_id in recipient_ids:
+        recipient = db.users.find_one({"id": recipient_id, "status": "Active"})
+        if not recipient:
+            continue
+        if db.notifications.find_one({"user_id": recipient_id, "source_conversation_id": message["id"]}):
+            continue
+        db.notifications.insert_one(
+            {
+                "id": next_public_id("notifications", "NTF"),
+                "user_id": recipient_id,
+                "title": "Document conversation mention",
+                "detail": detail,
+                "href": f"/documents/{document['id']}",
+                "document_id": document["id"],
+                "source_conversation_id": message["id"],
+                "type": "document_conversation",
                 "read": False,
                 "created_at": now,
                 "read_at": None,
@@ -859,6 +907,29 @@ def list_comments(document_id: str):
     return success_response([serialize_comment(comment) for comment in comments])
 
 
+@documents_bp.get("/documents/<document_id>/conversations")
+@require_auth()
+def list_document_conversations(document_id: str):
+    db = get_db()
+    user = current_user()
+    _log_document_event("info", "Document conversations requested", **_user_log_context(user), documentId=document_id)
+    document = db.documents.find_one({"id": document_id, "deleted_at": None})
+    if not document:
+        _log_document_event("warning", "Document conversations request failed", **_user_log_context(user), documentId=document_id, reason="not_found")
+        return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to view these conversations", 403)
+    conversations = _visible_conversations(document_id, user)
+    _log_document_event(
+        "info",
+        "Document conversations returned successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        visibleConversations=len(conversations),
+    )
+    return success_response([serialize_document_conversation(message) for message in conversations])
+
+
 @documents_bp.post("/documents/<document_id>/comments")
 @require_auth(["CEO", "Admin"])
 def add_comment(document_id: str):
@@ -949,3 +1020,95 @@ def add_comment(document_id: str):
         metadata={"visibility": visibility, "commentLength": len(text)},
     )
     return success_response(serialize_comment(comment), 201)
+
+
+@documents_bp.post("/documents/<document_id>/conversations")
+@require_auth()
+def add_document_conversation(document_id: str):
+    user = current_user()
+    db = get_db()
+    _log_document_event("info", "Document conversation request received", **_user_log_context(user), documentId=document_id)
+    document = db.documents.find_one({"id": document_id, "deleted_at": None})
+    if not document:
+        _log_document_event("warning", "Document conversation failed", **_user_log_context(user), documentId=document_id, reason="not_found")
+        return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to post to this document conversation", 403)
+
+    body = parse_json_body()
+    text = (body.get("text") or "").strip()
+    audience = (body.get("audience") or "workspace").strip()
+    mention_ids = body.get("mentionIds") or []
+    attachments = body.get("attachments") or []
+
+    if not text:
+        return error_response("Conversation text is required", 400)
+    if audience not in {"workspace", "executive", "uploader"}:
+        return error_response("Audience must be workspace, executive, or uploader", 400)
+    if audience == "executive" and user["role"] not in {"CEO", "Admin"}:
+        return error_response("Only executives and admins can post executive-only conversations", 403)
+    if not isinstance(mention_ids, list):
+        return error_response("mentionIds must be a list", 400)
+    if not isinstance(attachments, list):
+        return error_response("attachments must be a list", 400)
+
+    sanitized_mention_ids = []
+    mention_names = []
+    for value in mention_ids[:10]:
+        if not isinstance(value, str):
+            continue
+        recipient = db.users.find_one({"id": value, "status": "Active"})
+        if not recipient:
+            continue
+        if audience == "executive" and recipient.get("role") not in {"CEO", "Admin"}:
+            continue
+        sanitized_mention_ids.append(recipient["id"])
+        mention_names.append(recipient["name"])
+
+    sanitized_attachments = [value for value in attachments[:5] if isinstance(value, str) and value.strip()]
+
+    now = utc_now()
+    message = {
+        "id": next_public_id("document_conversations", "MSG"),
+        "document_id": document_id,
+        "document_uploader_id": document.get("uploaded_by_id"),
+        "author_id": user["id"],
+        "author_name": user["name"],
+        "author_role": user["role"],
+        "audience": audience,
+        "text": text,
+        "mention_ids": sanitized_mention_ids,
+        "mention_names": mention_names,
+        "attachments": sanitized_attachments,
+        "created_at": now,
+        "updated_at": now,
+    }
+    db.document_conversations.insert_one(message)
+    _create_notifications_for_conversation(document, user, message)
+    _record_activity(
+        "Conversation Posted",
+        document,
+        user,
+        {
+            "audience": audience,
+            "mentionCount": len(sanitized_mention_ids),
+            "conversationLength": len(text),
+        },
+    )
+    record_audit_event(
+        "Document Conversation Posted",
+        user=user,
+        resource_type="document",
+        resource_id=document_id,
+        metadata={"audience": audience, "mentionCount": len(sanitized_mention_ids), "conversationLength": len(text)},
+    )
+    _log_document_event(
+        "info",
+        "Document conversation added successfully",
+        **_user_log_context(user),
+        **_document_log_context(document),
+        conversationId=message["id"],
+        audience=audience,
+        mentionCount=len(sanitized_mention_ids),
+    )
+    return success_response(serialize_document_conversation(message), 201)

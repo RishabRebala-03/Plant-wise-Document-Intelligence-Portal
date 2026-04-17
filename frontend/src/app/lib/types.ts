@@ -56,6 +56,53 @@ export interface Comment {
   updatedAt?: string | null;
 }
 
+export interface DocumentConversationMessage {
+  id: string;
+  documentId: string;
+  authorId: string;
+  authorName: string;
+  authorRole: UserRole;
+  audience: "workspace" | "executive" | "uploader";
+  text: string;
+  mentions: string[];
+  mentionIds: string[];
+  attachments: string[];
+  createdAt: string | null;
+  updatedAt?: string | null;
+}
+
+export interface MessageThread {
+  id: string;
+  title?: string | null;
+  kind: "direct" | "group";
+  participants: Array<{ id: string; name: string; role: UserRole }>;
+  participantIds: string[];
+  linkedDocuments: Array<{ id: string; name: string; plant?: string | null; category?: string | null }>;
+  lastMessagePreview?: string | null;
+  lastMessageAt: string | null;
+  createdAt: string | null;
+  updatedAt?: string | null;
+  unread: boolean;
+  unreadCount: number;
+}
+
+export interface MessageEntry {
+  id: string;
+  threadId: string;
+  authorId: string;
+  authorName: string;
+  authorRole: UserRole;
+  text: string;
+  linkedDocuments: Array<{ id: string; name: string; plant?: string | null; category?: string | null }>;
+  recipientCount: number;
+  readByCount: number;
+  readByNames: string[];
+  receiptStatus?: "sent" | "delivered" | "read" | null;
+  lastReadAt?: string | null;
+  createdAt: string | null;
+  updatedAt?: string | null;
+}
+
 export interface DocumentFile {
   name?: string | null;
   contentType?: string | null;

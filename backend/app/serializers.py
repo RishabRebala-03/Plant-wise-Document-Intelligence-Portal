@@ -51,6 +51,23 @@ def serialize_comment(comment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def serialize_document_conversation(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": message["id"],
+        "documentId": message["document_id"],
+        "authorId": message["author_id"],
+        "authorName": message["author_name"],
+        "authorRole": message["author_role"],
+        "audience": message.get("audience", "workspace"),
+        "text": message["text"],
+        "mentions": message.get("mention_names", []),
+        "mentionIds": message.get("mention_ids", []),
+        "attachments": message.get("attachments", []),
+        "createdAt": to_iso(message.get("created_at")),
+        "updatedAt": to_iso(message.get("updated_at")),
+    }
+
+
 def serialize_document(document: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     note_count = len(comments or [])
     latest = serialize_comment(comments[0]) if comments else None
@@ -109,6 +126,42 @@ def serialize_notification(notification: dict[str, Any]) -> dict[str, Any]:
         "read": bool(notification.get("read")),
         "createdAt": to_iso(notification.get("created_at")),
         "readAt": to_iso(notification.get("read_at")),
+    }
+
+
+def serialize_message_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": thread["id"],
+        "title": thread.get("title"),
+        "kind": thread.get("kind", "direct"),
+        "participants": thread.get("participants", []),
+        "participantIds": thread.get("participant_ids", []),
+        "linkedDocuments": thread.get("linked_documents", []),
+        "lastMessagePreview": thread.get("last_message_preview"),
+        "lastMessageAt": to_iso(thread.get("last_message_at")),
+        "createdAt": to_iso(thread.get("created_at")),
+        "updatedAt": to_iso(thread.get("updated_at")),
+        "unread": bool(thread.get("unread", False)),
+        "unreadCount": int(thread.get("unread_count", 0)),
+    }
+
+
+def serialize_message_entry(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": message["id"],
+        "threadId": message["thread_id"],
+        "authorId": message["author_id"],
+        "authorName": message["author_name"],
+        "authorRole": message["author_role"],
+        "text": message["text"],
+        "linkedDocuments": message.get("linked_documents", []),
+        "recipientCount": int(message.get("recipient_count", 0)),
+        "readByCount": int(message.get("read_by_count", 0)),
+        "readByNames": message.get("read_by_names", []),
+        "receiptStatus": message.get("receipt_status"),
+        "lastReadAt": to_iso(message.get("last_read_at")),
+        "createdAt": to_iso(message.get("created_at")),
+        "updatedAt": to_iso(message.get("updated_at")),
     }
 
 

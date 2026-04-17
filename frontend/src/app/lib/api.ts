@@ -3,9 +3,12 @@ import type {
   Activity,
   CeoDashboardData,
   Comment,
+  DocumentConversationMessage,
   DocumentRecord,
   GovernancePolicy,
   ManagerDashboardData,
+  MessageEntry,
+  MessageThread,
   NotificationItem,
   OutsideHoursAttempt,
   Plant,
@@ -270,6 +273,26 @@ export const documentsApi = {
     });
   },
 
+  listConversations(documentId: string) {
+    return apiFetch<DocumentConversationMessage[]>(`/documents/${documentId}/conversations`);
+  },
+
+  addConversation(
+    documentId: string,
+    body: {
+      text: string;
+      audience: "workspace" | "executive" | "uploader";
+      mentionIds?: string[];
+      attachments?: string[];
+    },
+  ) {
+    return apiFetch<DocumentConversationMessage>(`/documents/${documentId}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+
   downloadFile(documentId: string) {
     return apiFetchBlob(`/documents/${documentId}/download`);
   },
@@ -505,6 +528,37 @@ export const notificationsApi = {
   markRead(notificationId: string) {
     return apiFetch<NotificationItem>(`/notifications/${notificationId}/read`, {
       method: "POST",
+    });
+  },
+};
+
+export const messagesApi = {
+  listContacts() {
+    return apiFetch<User[]>("/messages/contacts");
+  },
+  listThreads() {
+    return apiFetch<MessageThread[]>("/messages/threads");
+  },
+  createThread(body: {
+    title?: string;
+    participantIds: string[];
+    documentIds?: string[];
+    openingText?: string;
+  }) {
+    return apiFetch<MessageThread>("/messages/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  listMessages(threadId: string) {
+    return apiFetch<MessageEntry[]>(`/messages/threads/${threadId}/messages`);
+  },
+  postMessage(threadId: string, body: { text: string; documentIds?: string[] }) {
+    return apiFetch<MessageEntry>(`/messages/threads/${threadId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   },
 };

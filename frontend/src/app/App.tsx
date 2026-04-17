@@ -23,6 +23,8 @@ import {
   LogOut,
   MessageSquare,
   Network,
+  Eye,
+  EyeOff,
   Plus,
   Save,
   Search,
@@ -72,7 +74,7 @@ import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { DocumentDrawer } from "./components/document-drawer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
+import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, messagesApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -97,7 +99,7 @@ import {
   type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Activity, Comment, DocumentRecord, GovernancePolicy, NotificationItem, OutsideHoursAttempt, Plant, SessionRecord, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentConversationMessage, DocumentRecord, GovernancePolicy, MessageEntry, MessageThread, NotificationItem, OutsideHoursAttempt, Plant, SessionRecord, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -131,12 +133,39 @@ type NavItem = {
   path: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   capability?: AccessCapability;
+  badgeCount?: number;
 };
 
 const PortalContext = createContext<PortalContextValue | null>(null);
 const SESSION_STORAGE_PREFIX = "midwest.activeSession";
 const SESSION_WARNING_SECONDS = 60;
 const CHART_COLORS = ["#0A6ED1", "#107E3E", "#5B738B", "#354A5F", "#7F97AD"];
+const GOVERNANCE_TIMEZONES = [
+  "Asia/Kolkata",
+  "America/Chicago",
+  "America/New_York",
+  "America/Denver",
+  "America/Los_Angeles",
+  "UTC",
+];
+const GOVERNANCE_TIME_OPTIONS = Array.from({ length: 24 }, (_, hour) => ({
+  value: hour,
+  label: new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2020, 0, 1, hour, 0))),
+}));
+const BUSINESS_DAY_OPTIONS = [
+  { label: "Mon", value: 0 },
+  { label: "Tue", value: 1 },
+  { label: "Wed", value: 2 },
+  { label: "Thu", value: 3 },
+  { label: "Fri", value: 4 },
+  { label: "Sat", value: 5 },
+  { label: "Sun", value: 6 },
+];
 
 function usePortal() {
   const value = useContext(PortalContext);
@@ -171,6 +200,63 @@ function formatDate(value?: string | null) {
     month: "short",
     day: "numeric",
   });
+}
+
+function formatBusinessHour(value: number) {
+  return GOVERNANCE_TIME_OPTIONS.find((option) => option.value === value)?.label || `${value}:00`;
+}
+
+function normalizeGovernancePolicy(policy: GovernancePolicy): GovernancePolicy {
+  const uniqueFormats = Array.from(new Set(policy.allowedUploadFormats.map((value) => value.toLowerCase())));
+  const uniqueDays = Array.from(new Set(policy.businessHours.allowedDays)).sort((a, b) => a - b);
+  return {
+    allowedUploadFormats: uniqueFormats,
+    businessHours: {
+      timezone: policy.businessHours.timezone,
+      startHour: Math.min(23, Math.max(0, policy.businessHours.startHour)),
+      endHour: Math.min(23, Math.max(0, policy.businessHours.endHour)),
+      allowedDays: uniqueDays,
+    },
+  };
+}
+
+function describeBusinessHours(policy: GovernancePolicy) {
+  const dayLabels = BUSINESS_DAY_OPTIONS
+    .filter((day) => policy.businessHours.allowedDays.includes(day.value))
+    .map((day) => day.label)
+    .join(", ");
+  return `${dayLabels || "No active days"} • ${formatBusinessHour(policy.businessHours.startHour)} - ${formatBusinessHour(policy.businessHours.endHour)} • ${policy.businessHours.timezone}`;
+}
+
+function getBusinessTimeParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    hour: "numeric",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const weekday = parts.find((part) => part.type === "weekday")?.value || "Mon";
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || "0");
+  return { weekday, hour };
+}
+
+function isWithinGovernanceBusinessHours(policy: GovernancePolicy, date = new Date()) {
+  const normalized = normalizeGovernancePolicy(policy);
+  const { weekday, hour } = getBusinessTimeParts(date, normalized.businessHours.timezone);
+  const weekdayMap: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  const dayValue = weekdayMap[weekday] ?? 0;
+  const isAllowedDay = normalized.businessHours.allowedDays.includes(dayValue);
+  if (!isAllowedDay) return false;
+  return hour >= normalized.businessHours.startHour && hour < normalized.businessHours.endHour;
 }
 
 function statLabel(value: number, singular: string, plural = `${singular}s`) {
@@ -513,9 +599,35 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
   const { user, notifications, portalState } = usePortal();
   const { can } = useRoleAccess();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
   const isCeo = user.role === "CEO";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadUnreadCount() {
+      try {
+        const threads = await messagesApi.listThreads();
+        if (cancelled) return;
+        setMessageUnreadCount(threads.reduce((total, thread) => total + (thread.unreadCount || 0), 0));
+      } catch {
+        if (cancelled) return;
+        setMessageUnreadCount(0);
+      }
+    }
+
+    void loadUnreadCount();
+    const interval = window.setInterval(() => {
+      void loadUnreadCount();
+    }, LIVE_SYNC_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [location.pathname]);
 
   const navGroups = useMemo<NavItem[][]>(() => {
     const common: NavItem[] = [{ label: "Settings", path: user.role === "Admin" ? "/admin/settings" : "/settings", icon: Settings }];
@@ -527,11 +639,12 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       if (can("canConfigureIp")) {
         governance.push({ label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" });
       }
-      return [
+        return [
         [
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
+          { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
           { label: "Analytics", path: "/analytics", icon: LineChartIcon },
           { label: "Audit Logs", path: "/activity-logs", icon: Clock3 },
           ...governance,
@@ -545,6 +658,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
+          { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
           { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus, capability: "canCreateProjects" },
           { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
         ],
@@ -556,6 +670,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
         { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
         { label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" },
+        { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
         { label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" },
         { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
@@ -563,7 +678,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       ],
       common,
     ];
-  }, [can, user]);
+  }, [can, messageUnreadCount, user]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.12),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(91,115,139,0.10),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] text-slate-900">
@@ -707,7 +822,14 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
                       }`}
                     >
                       <item.icon size={16} />
-                      {item.label}
+                      <span className="flex-1">{item.label}</span>
+                      {item.badgeCount && item.badgeCount > 0 ? (
+                        <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+                          active ? "bg-white/18 text-white" : "bg-[#0A6ED1] text-white"
+                        }`}>
+                          {item.badgeCount > 99 ? "99+" : item.badgeCount}
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -1434,8 +1556,12 @@ function FilterField({ icon: Icon, label, children }: { icon: React.ComponentTyp
 
 function DocumentDetailPage() {
   const { documentId } = useParams();
-  const { user, documents, markDocumentLocked, refreshData } = usePortal();
+  const { user, users, documents, markDocumentLocked, refreshData } = usePortal();
   const [comments, setComments] = useState<Comment[]>([]);
+  const [conversationDraft, setConversationDraft] = useState("");
+  const [conversationAudience, setConversationAudience] = useState<"workspace" | "executive" | "uploader">("workspace");
+  const [conversationMessages, setConversationMessages] = useState<DocumentConversationMessage[]>([]);
+  const [selectedMentionIds, setSelectedMentionIds] = useState<string[]>([]);
   const [commentError, setCommentError] = useState("");
   const [commentText, setCommentText] = useState("");
   const [commentVisibility, setCommentVisibility] = useState<"private" | "public">("private");
@@ -1444,8 +1570,12 @@ function DocumentDetailPage() {
 
   useEffect(() => {
     if (!documentId) return;
-    documentsApi.get(documentId)
-      .then((result) => setComments(result.comments))
+    Promise.all([documentsApi.get(documentId), documentsApi.listConversations(documentId)])
+      .then(([result, conversations]) => {
+        setComments(result.comments);
+        setConversationMessages(conversations);
+        setCommentError("");
+      })
       .catch((error) => setCommentError(error instanceof Error ? error.message : "Unable to load document comments."));
   }, [documentId]);
 
@@ -1472,7 +1602,46 @@ function DocumentDetailPage() {
     }
   }
 
+  function toggleMention(userId: string) {
+    const candidate = users.find((entry) => entry.id === userId);
+    if (!candidate) return;
+    setSelectedMentionIds((current) =>
+      current.includes(userId)
+        ? current.filter((value) => value !== userId)
+        : [...current, userId],
+    );
+    setConversationDraft((current) => {
+      const token = `@${candidate.name.split(" ")[0]}`;
+      return current.includes(token) ? current : `${current}${current.trim() ? " " : ""}${token} `;
+    });
+  }
+
+  async function handlePostConversation() {
+    if (!documentId || !conversationDraft.trim()) return;
+    try {
+      const created = await documentsApi.addConversation(documentId, {
+        text: conversationDraft.trim(),
+        audience: conversationAudience,
+        mentionIds: selectedMentionIds,
+        attachments: [document?.name || "Current document"],
+      });
+      setConversationMessages((current) => [created, ...current]);
+      setConversationDraft("");
+      setSelectedMentionIds([]);
+      setConversationAudience("workspace");
+    } catch (error) {
+      setCommentError(error instanceof Error ? error.message : "Unable to post this conversation.");
+    }
+  }
+
   if (!document) return <NotFoundCard title="Document not found" body="This document is no longer available in the current filtered workspace." />;
+
+  const mentionCandidates = users.filter((candidate) => candidate.id !== user.id);
+  const conversationAudienceLabels: Record<"workspace" | "executive" | "uploader", string> = {
+    workspace: "Document team",
+    executive: "Executive only",
+    uploader: "Uploader + leadership",
+  };
 
   const breadcrumbs = user.role === "Admin"
     ? [
@@ -1616,23 +1785,144 @@ function DocumentDetailPage() {
               {commentError}
             </div>
           ) : null}
-          <div className="mt-4 space-y-3">
-            {comments.map((comment) => (
-              <div key={comment.id} className="rounded-3xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-900">{comment.author}</div>
-                  <div className="text-xs uppercase tracking-wide text-slate-400">{comment.visibility}</div>
+          <Tabs defaultValue="notes" className="mt-4 space-y-4">
+            <TabsList className="grid w-full grid-cols-2 rounded-2xl bg-slate-100 p-1">
+              <TabsTrigger value="notes" className="rounded-xl text-sm">Executive notes</TabsTrigger>
+              <TabsTrigger value="conversation" className="rounded-xl text-sm">Document conversations</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="notes" className="mt-0 space-y-3">
+              {comments.map((comment) => (
+                <div key={comment.id} className="rounded-3xl border border-slate-200 bg-white p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">{comment.author}</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-400">{comment.visibility}</div>
+                  </div>
+                  <div className="mt-2 text-sm text-slate-600">{comment.text}</div>
+                  <div className="mt-2 text-xs text-slate-400">{formatDate(comment.date)}</div>
                 </div>
-                <div className="mt-2 text-sm text-slate-600">{comment.text}</div>
-                <div className="mt-2 text-xs text-slate-400">{formatDate(comment.date)}</div>
+              ))}
+              {!comments.length ? (
+                <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  {commentError || "No comments have been recorded for this document."}
+                </div>
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="conversation" className="mt-0 space-y-4">
+              <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#fbfdff,#f6f8fb)] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-base font-semibold text-slate-900">Context-native discussion thread</div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      Keep conversations attached to this document, mention teammates, and preserve decision context alongside the record.
+                    </div>
+                  </div>
+                  <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+                    {conversationMessages.length} message{conversationMessages.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+                  <textarea
+                    value={conversationDraft}
+                    onChange={(event) => setConversationDraft(event.target.value)}
+                    rows={4}
+                    placeholder="Start a document conversation, request action, or tag someone for follow-up..."
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-[#0A6ED1]"
+                  />
+                  <div className="grid gap-3">
+                    <select
+                      value={conversationAudience}
+                      onChange={(event) => setConversationAudience(event.target.value as "workspace" | "executive" | "uploader")}
+                      className="h-11 min-w-[190px] rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-[#0A6ED1]"
+                    >
+                      <option value="workspace">Document team</option>
+                      <option value="uploader">Uploader + leadership</option>
+                      <option value="executive">Executive only</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handlePostConversation}
+                      disabled={!conversationDraft.trim()}
+                      className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Post conversation
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {mentionCandidates.slice(0, 8).map((candidate) => (
+                    <button
+                      key={`mention-${candidate.id}`}
+                      type="button"
+                      onClick={() => toggleMention(candidate.id)}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                        selectedMentionIds.includes(candidate.id)
+                          ? "border-[#0A6ED1] bg-[#EBF4FD] text-[#0A6ED1]"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      @{candidate.name.split(" ")[0]}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white">
+                    Document attached: {document.name}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                    Audience: {conversationAudienceLabels[conversationAudience]}
+                  </span>
+                </div>
               </div>
-            ))}
-            {!comments.length ? (
-              <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                {commentError || "No comments have been recorded for this document."}
+
+              <div className="space-y-3">
+                {conversationMessages.map((message) => (
+                  <div key={message.id} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{message.authorName}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{message.authorRole}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full bg-[#EBF4FD] px-3 py-1 text-xs font-medium text-[#0A6ED1]">
+                          {conversationAudienceLabels[message.audience]}
+                        </span>
+                        <span className="text-xs text-slate-400">{formatDate(message.createdAt)}</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-sm leading-6 text-slate-700">{message.text}</div>
+                    {message.mentions.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {message.mentions.map((mention) => (
+                          <span key={`${message.id}-${mention}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                            @{mention.split(" ")[0]}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {message.attachments.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {message.attachments.map((attachment) => (
+                          <span key={`${message.id}-${attachment}`} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">
+                            {attachment}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                {!conversationMessages.length ? (
+                  <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                    No conversation has started on this document yet. Use the thread above to kick off follow-ups, tag stakeholders, and keep decisions attached to the document.
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </TabsContent>
+          </Tabs>
         </SectionCard>
       </div>
     </div>
@@ -1648,8 +1938,549 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
   );
 }
 
+function MessagingPage() {
+  const { user, documents } = usePortal();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const requestedThreadId = searchParams.get("threadId") || "";
+  const [contacts, setContacts] = useState<User[]>([]);
+  const [threads, setThreads] = useState<MessageThread[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState("");
+  const [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [loadingThreads, setLoadingThreads] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [threadSearch, setThreadSearch] = useState("");
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [composerText, setComposerText] = useState("");
+  const [selectedComposerDocumentIds, setSelectedComposerDocumentIds] = useState<string[]>([]);
+  const [newThreadTitle, setNewThreadTitle] = useState("");
+  const [newThreadOpeningText, setNewThreadOpeningText] = useState("");
+  const [newThreadParticipantIds, setNewThreadParticipantIds] = useState<string[]>([]);
+  const [newThreadDocumentIds, setNewThreadDocumentIds] = useState<string[]>([]);
+  const [creatingThread, setCreatingThread] = useState(false);
+  const [postingMessage, setPostingMessage] = useState(false);
+
+  const availableRecipients = useMemo(
+    () => contacts.filter((candidate) => candidate.id !== user.id && candidate.status === "Active"),
+    [contacts, user.id],
+  );
+
+  const selectableDocuments = useMemo(
+    () => documents.slice(0, 40),
+    [documents],
+  );
+
+  const selectedThread = threads.find((thread) => thread.id === selectedThreadId) || null;
+  const filteredThreads = useMemo(() => {
+    const query = threadSearch.trim().toLowerCase();
+    if (!query) return threads;
+    return threads.filter((thread) => {
+      const title = (thread.title || "").toLowerCase();
+      const participants = thread.participants.map((participant) => participant.name.toLowerCase()).join(" ");
+      const preview = (thread.lastMessagePreview || "").toLowerCase();
+      return `${title} ${participants} ${preview}`.includes(query);
+    });
+  }, [threadSearch, threads]);
+
+  function getThreadName(thread: MessageThread) {
+    return (
+      thread.title
+      || thread.participants.filter((participant) => participant.id !== user.id).map((participant) => participant.name).join(", ")
+      || "Untitled thread"
+    );
+  }
+
+  function getReceiptLabel(message: MessageEntry) {
+    if (message.authorId !== user.id || !message.receiptStatus) return "";
+    if (message.receiptStatus === "read") {
+      if (message.recipientCount > 1) {
+        return message.readByCount >= message.recipientCount
+          ? "Read by all"
+          : `Read by ${message.readByCount}/${message.recipientCount}`;
+      }
+      return message.readByNames[0] ? `Read by ${message.readByNames[0]}` : "Read";
+    }
+    if (message.receiptStatus === "delivered") {
+      return message.recipientCount > 1
+        ? `Delivered to ${message.recipientCount}`
+        : "Delivered";
+    }
+    return "Sent";
+  }
+
+  async function loadThreads(preferredThreadId?: string) {
+    setLoadingThreads(true);
+    try {
+      const result = await messagesApi.listThreads();
+      setThreads(result);
+      setSelectedThreadId((current) => {
+        if (preferredThreadId && result.some((thread) => thread.id === preferredThreadId)) {
+          return preferredThreadId;
+        }
+        if (requestedThreadId && result.some((thread) => thread.id === requestedThreadId)) {
+          return requestedThreadId;
+        }
+        if (current && result.some((thread) => thread.id === current)) {
+          return current;
+        }
+        return result[0]?.id || "";
+      });
+      setWorkspaceError("");
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Unable to load messages.");
+    } finally {
+      setLoadingThreads(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadThreads();
+  }, [requestedThreadId]);
+
+  useEffect(() => {
+    messagesApi
+      .listContacts()
+      .then((result) => {
+        setContacts(result);
+        setWorkspaceError("");
+      })
+      .catch((error) => setWorkspaceError(error instanceof Error ? error.message : "Unable to load message contacts."));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedThreadId) {
+      setMessages([]);
+      return;
+    }
+    setLoadingMessages(true);
+    messagesApi
+      .listMessages(selectedThreadId)
+      .then((result) => {
+        setMessages(result);
+        setThreads((current) => current.map((thread) => (
+          thread.id === selectedThreadId
+            ? { ...thread, unread: false, unreadCount: 0 }
+            : thread
+        )));
+        setWorkspaceError("");
+      })
+      .catch((error) => setWorkspaceError(error instanceof Error ? error.message : "Unable to load thread messages."))
+      .finally(() => setLoadingMessages(false));
+  }, [selectedThreadId]);
+
+  function toggleMultiSelect(setter: React.Dispatch<React.SetStateAction<string[]>>, value: string) {
+    setter((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
+  }
+
+  async function handleCreateThread() {
+    if (!newThreadParticipantIds.length || !newThreadOpeningText.trim()) {
+      setWorkspaceError("Pick at least one participant and add an opening message.");
+      return;
+    }
+    setCreatingThread(true);
+    try {
+      const created = await messagesApi.createThread({
+        title: newThreadTitle.trim() || undefined,
+        participantIds: newThreadParticipantIds,
+        documentIds: newThreadDocumentIds,
+        openingText: newThreadOpeningText.trim(),
+      });
+      setNewThreadTitle("");
+      setNewThreadOpeningText("");
+      setNewThreadParticipantIds([]);
+      setNewThreadDocumentIds([]);
+      setShowNewChat(false);
+      await loadThreads(created.id);
+      navigate(`/messages?threadId=${created.id}`, { replace: true });
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Unable to create this conversation.");
+    } finally {
+      setCreatingThread(false);
+    }
+  }
+
+  async function handlePostMessage() {
+    if (!selectedThreadId || !composerText.trim()) return;
+    setPostingMessage(true);
+    try {
+      const created = await messagesApi.postMessage(selectedThreadId, {
+        text: composerText.trim(),
+        documentIds: selectedComposerDocumentIds,
+      });
+      setMessages((current) => [...current, created]);
+      setComposerText("");
+      setSelectedComposerDocumentIds([]);
+      await loadThreads(selectedThreadId);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Unable to send this message.");
+    } finally {
+      setPostingMessage(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={[{ label: "Messages" }]} />
+      <section className="rounded-[34px] border border-white/60 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98),_rgba(37,99,235,0.95))] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="text-xs uppercase tracking-[0.28em] text-white/55">Portal messaging workspace</div>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Messaging built around your teams and documents</h1>
+            <p className="mt-3 text-sm leading-6 text-white/72">
+              Use a familiar chat flow for direct messages, leadership groups, and document-linked discussions without leaving the portal.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 text-sm text-white/80">
+              {threads.length} active thread{threads.length === 1 ? "" : "s"}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowNewChat((current) => !current)}
+              className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-slate-100"
+            >
+              <Plus className="h-4 w-4" />
+              {showNewChat ? "Close composer" : "New conversation"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {workspaceError ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {workspaceError}
+        </div>
+      ) : null}
+
+      <section className="grid min-h-[72vh] gap-0 overflow-hidden rounded-[34px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.08)] xl:grid-cols-[360px_minmax(0,1fr)]">
+        <aside className="border-b border-slate-200 bg-[linear-gradient(180deg,_#f8fbff,_#ffffff)] xl:border-b-0 xl:border-r">
+          <div className="border-b border-slate-200 px-5 py-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-950">Recent chats</div>
+                <div className="mt-1 text-sm text-slate-500">Direct messages, groups, and document-linked threads.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewChat((current) => !current)}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 transition hover:border-[#0A6ED1] hover:text-[#0A6ED1]"
+                aria-label="Create conversation"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            </div>
+            <label className="mt-4 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <Search className="h-4 w-4 text-slate-400" />
+              <input
+                value={threadSearch}
+                onChange={(event) => setThreadSearch(event.target.value)}
+                placeholder="Search chats, people, or previews"
+                className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+              />
+            </label>
+          </div>
+
+          {showNewChat ? (
+            <div className="border-b border-slate-200 px-5 py-5">
+              <div className="rounded-[28px] border border-[#cfe2ff] bg-[#f6faff] p-4">
+                <div className="text-sm font-semibold text-slate-900">Start a new conversation</div>
+                <div className="mt-1 text-sm text-slate-500">Choose people, attach reference documents, and send the opening message.</div>
+                <div className="mt-4 space-y-4">
+                  <label className="space-y-2 text-sm">
+                    <span className="font-medium text-slate-700">Thread title</span>
+                    <input
+                      value={newThreadTitle}
+                      onChange={(event) => setNewThreadTitle(event.target.value)}
+                      placeholder="Optional for direct chats, useful for groups"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-[#0A6ED1]"
+                    />
+                  </label>
+                  <div className="space-y-2 text-sm">
+                    <span className="font-medium text-slate-700">Recipients</span>
+                    <div className="flex max-h-32 flex-wrap gap-2 overflow-auto rounded-2xl border border-slate-200 bg-white p-3">
+                      {availableRecipients.map((recipient) => (
+                        <button
+                          key={recipient.id}
+                          type="button"
+                          onClick={() => toggleMultiSelect(setNewThreadParticipantIds, recipient.id)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                            newThreadParticipantIds.includes(recipient.id)
+                              ? "border-[#0A6ED1] bg-[#EBF4FD] text-[#0A6ED1]"
+                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          {recipient.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <span className="font-medium text-slate-700">Reference documents</span>
+                    <div className="flex max-h-28 flex-wrap gap-2 overflow-auto rounded-2xl border border-slate-200 bg-white p-3">
+                      {selectableDocuments.map((document) => (
+                        <button
+                          key={`new-thread-doc-${document.id}`}
+                          type="button"
+                          onClick={() => toggleMultiSelect(setNewThreadDocumentIds, document.id)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                            newThreadDocumentIds.includes(document.id)
+                              ? "border-slate-950 bg-slate-950 text-white"
+                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          {document.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="space-y-2 text-sm">
+                    <span className="font-medium text-slate-700">Opening message</span>
+                    <textarea
+                      value={newThreadOpeningText}
+                      onChange={(event) => setNewThreadOpeningText(event.target.value)}
+                      rows={4}
+                      placeholder="Write the first message..."
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-[#0A6ED1]"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={creatingThread}
+                    onClick={() => void handleCreateThread()}
+                    className="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {creatingThread ? "Creating..." : "Create conversation"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="max-h-[calc(72vh-5rem)] overflow-auto p-3">
+            {loadingThreads ? <div className="px-3 py-4 text-sm text-slate-500">Loading conversations...</div> : null}
+            {!loadingThreads && filteredThreads.map((thread) => {
+              const counterpart = thread.participants.find((participant) => participant.id !== user.id) || thread.participants[0];
+              return (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedThreadId(thread.id);
+                    navigate(`/messages?threadId=${thread.id}`, { replace: true });
+                  }}
+                  className={`mb-2 w-full rounded-[24px] border px-4 py-3 text-left transition ${
+                    selectedThreadId === thread.id
+                      ? "border-[#0A6ED1] bg-[#EBF4FD] shadow-[0_12px_30px_rgba(10,110,209,0.12)]"
+                      : "border-transparent bg-white hover:border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-sm font-semibold text-slate-700">
+                      {(counterpart?.name || "T").slice(0, 1)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="truncate text-sm font-semibold text-slate-900">{getThreadName(thread)}</div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {thread.unreadCount > 0 ? (
+                            <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-[#0A6ED1] px-2 py-0.5 text-[11px] font-semibold text-white">
+                              {thread.unreadCount > 99 ? "99+" : thread.unreadCount}
+                            </span>
+                          ) : null}
+                          <div className="text-[11px] text-slate-400">{formatDateTime(thread.lastMessageAt)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{thread.kind}</span>
+                        {thread.unread ? <span className="h-2 w-2 rounded-full bg-[#0A6ED1]" /> : null}
+                      </div>
+                      <div className="mt-2 line-clamp-2 text-sm text-slate-500">{thread.lastMessagePreview || "No messages yet."}</div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+            {!loadingThreads && !filteredThreads.length ? (
+              <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                {threads.length ? "No chats match that search." : "No conversations yet. Use the plus button to start one."}
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
+        <div className="flex min-h-[72vh] flex-col bg-[linear-gradient(180deg,_#f8fbff_0%,_#ffffff_28%)]">
+          {selectedThread ? (
+            <>
+              <div className="border-b border-slate-200 px-5 py-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="text-2xl font-semibold text-slate-950">{getThreadName(selectedThread)}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {selectedThread.participants.map((participant) => `${participant.name} · ${participant.role}`).join("   |   ")}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                      {selectedThread.kind}
+                    </div>
+                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                      {messages.length} message{messages.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </div>
+                {selectedThread.linkedDocuments.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {selectedThread.linkedDocuments.map((document) => (
+                      <button
+                        key={`thread-doc-${document.id}`}
+                        type="button"
+                        onClick={() => navigate(`/documents/${document.id}`)}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100"
+                      >
+                        {document.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex-1 overflow-auto px-5 py-5">
+                {loadingMessages ? <div className="text-sm text-slate-500">Loading messages...</div> : null}
+                {!loadingMessages && messages.length ? (
+                  <div className="space-y-4">
+                    {messages.map((message) => {
+                      const own = message.authorId === user.id;
+                      return (
+                        <div key={message.id} className={`flex ${own ? "justify-end" : "justify-start"}`}>
+                          <div className={`max-w-[80%] rounded-[28px] px-4 py-3 shadow-sm ${own ? "bg-[#0A6ED1] text-white" : "border border-slate-200 bg-white text-slate-900"}`}>
+                            <div className={`flex items-center justify-between gap-4 text-xs ${own ? "text-white/72" : "text-slate-400"}`}>
+                              <span className={`font-semibold uppercase tracking-[0.18em] ${own ? "text-white/72" : "text-slate-400"}`}>
+                                {own ? "You" : `${message.authorName} · ${message.authorRole}`}
+                              </span>
+                              <span>{formatDateTime(message.createdAt)}</span>
+                            </div>
+                            <div className={`mt-2 whitespace-pre-wrap text-sm leading-6 ${own ? "text-white" : "text-slate-700"}`}>{message.text}</div>
+                            {message.linkedDocuments.length ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {message.linkedDocuments.map((document) => (
+                                  <button
+                                    key={`${message.id}-${document.id}`}
+                                    type="button"
+                                    onClick={() => navigate(`/documents/${document.id}`)}
+                                    className={`rounded-full border px-3 py-1 text-xs transition ${own ? "border-white/25 bg-white/12 text-white hover:bg-white/20" : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"}`}
+                                  >
+                                    {document.name}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                            {own ? (
+                              <div className={`mt-3 text-right text-[11px] ${own ? "text-white/78" : "text-slate-400"}`}>
+                                {getReceiptLabel(message)}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {!loadingMessages && !messages.length ? (
+                  <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
+                    No messages in this thread yet.
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="border-t border-slate-200 bg-white px-5 py-4">
+                {selectedComposerDocumentIds.length ? (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {selectedComposerDocumentIds.map((documentId) => {
+                      const document = selectableDocuments.find((entry) => entry.id === documentId);
+                      if (!document) return null;
+                      return (
+                        <button
+                          key={`selected-composer-doc-${document.id}`}
+                          type="button"
+                          onClick={() => toggleMultiSelect(setSelectedComposerDocumentIds, document.id)}
+                          className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-700 transition hover:bg-slate-200"
+                        >
+                          {document.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-3">
+                  <textarea
+                    value={composerText}
+                    onChange={(event) => setComposerText(event.target.value)}
+                    rows={3}
+                    placeholder="Write a message..."
+                    className="w-full resize-none bg-transparent px-2 py-2 text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                  />
+                  <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Attach documents</div>
+                      <div className="flex max-h-24 flex-wrap gap-2 overflow-auto">
+                        {selectableDocuments.map((document) => (
+                          <button
+                            key={`composer-doc-${document.id}`}
+                            type="button"
+                            onClick={() => toggleMultiSelect(setSelectedComposerDocumentIds, document.id)}
+                            className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                              selectedComposerDocumentIds.includes(document.id)
+                                ? "border-slate-950 bg-slate-950 text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            {document.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={postingMessage || !composerText.trim()}
+                      onClick={() => void handlePostMessage()}
+                      className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {postingMessage ? "Sending..." : "Send message"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex h-full flex-1 items-center justify-center px-6 py-16">
+              <div className="max-w-md rounded-[30px] border border-dashed border-slate-200 bg-white p-8 text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-[#EBF4FD] text-[#0A6ED1]">
+                  <MessageSquare className="h-8 w-8" />
+                </div>
+                <div className="mt-5 text-2xl font-semibold text-slate-950">Pick a conversation</div>
+                <div className="mt-2 text-sm leading-6 text-slate-500">
+                  Open a recent thread from the left, or start a new one with the composer to begin a document-linked discussion.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNewChat(true)}
+                  className="mt-6 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Start new conversation
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AnalyticsPage() {
-  const { documents, plants, projects } = usePortal();
+  const { documents, plants, projects, users, notifications, portalState } = usePortal();
   const navigate = useNavigate();
 
   const monthly = useMemo(() => {
@@ -1748,17 +2579,149 @@ function AnalyticsPage() {
     };
   }, [categoryMix, documents, monthly, plantBreakdown]);
 
+  const recentDocuments = useMemo(
+    () =>
+      [...documents]
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+        .slice(0, 5),
+    [documents],
+  );
+
+  const dormantPlants = useMemo(
+    () =>
+      plantBreakdown
+        .filter((item) => item.documents <= 2)
+        .slice(0, 3),
+    [plantBreakdown],
+  );
+
+  const securityAlerts = useMemo(
+    () =>
+      notifications.filter((item) => /alert|security|session|ip|access/i.test(`${item.title} ${item.detail}`)).length,
+    [notifications],
+  );
+
+  const disabledUsers = useMemo(
+    () => users.filter((candidate) => candidate.status !== "Active").length,
+    [users],
+  );
+
+  const reviewRules = useMemo(
+    () => portalState.ipRules.filter((rule) => rule.status === "Review").length,
+    [portalState.ipRules],
+  );
+
+  const blockedRules = useMemo(
+    () => portalState.ipRules.filter((rule) => rule.status === "Blocked").length,
+    [portalState.ipRules],
+  );
+
+  const trustScore = useMemo(() => {
+    const bonuses = (portalState.sessionPolicy.enforceSingleSession ? 8 : 0) + (portalState.sessionPolicy.conflictMode === "block" ? 6 : 0);
+    const penalties = (disabledUsers * 6) + (reviewRules * 7) + (securityAlerts * 4) + Math.min(20, timelineHighlights.totalLocked * 2);
+    return Math.max(24, Math.min(100, 84 + bonuses - penalties - blockedRules * 2));
+  }, [blockedRules, disabledUsers, portalState.sessionPolicy.conflictMode, portalState.sessionPolicy.enforceSingleSession, reviewRules, securityAlerts, timelineHighlights.totalLocked]);
+
+  const trustPillars = [
+    { label: "Identity hygiene", value: Math.max(20, 100 - disabledUsers * 15), detail: `${disabledUsers} account${disabledUsers === 1 ? "" : "s"} need attention.` },
+    { label: "Network posture", value: Math.max(20, 100 - reviewRules * 18 - blockedRules * 8), detail: `${reviewRules} rules in review, ${blockedRules} blocked.` },
+    { label: "Session control", value: portalState.sessionPolicy.enforceSingleSession ? 93 : 68, detail: `${portalState.sessionPolicy.autoLogoutMinutes} minute timeout with ${portalState.sessionPolicy.conflictMode} conflict mode.` },
+    { label: "Document control", value: Math.max(20, 100 - timelineHighlights.totalLocked * 6), detail: `${timelineHighlights.totalLocked} records are in controlled manager-locked state.` },
+  ];
+
+  const briefingCards = [
+    {
+      title: "What moved",
+      detail: `${recentDocuments.length} recent uploads are driving the latest activity, led by ${recentDocuments[0]?.plant || "no plant"} and ${recentDocuments[0]?.category || "no category"}.`,
+      action: "/documents",
+      label: "Open recent docs",
+    },
+    {
+      title: "What needs attention",
+      detail: dormantPlants.length
+        ? `${dormantPlants.map((item) => item.plant).join(", ")} are under-reporting and may need follow-up.`
+        : "No dormant plants are currently falling behind the rest of the network.",
+      action: "/plants",
+      label: "Review plants",
+    },
+    {
+      title: "What could escalate",
+      detail: securityAlerts
+        ? `${securityAlerts} active trust or security signals could surface in the next executive review cycle.`
+        : "No active trust alerts are crowding the executive queue right now.",
+      action: "/activity-logs",
+      label: "Review trust layer",
+    },
+  ];
+
+  const signalWall = plantBreakdown.slice(0, 4).map((item, index) => ({
+    ...item,
+    intensity: Math.min(100, item.documents * 9 + item.locked * 8 + item.projects * 5),
+    tone: ["from-[#DBEAFE] to-[#EFF6FF]", "from-[#DCFCE7] to-[#F0FDF4]", "from-[#FEF3C7] to-[#FFFBEB]", "from-[#FCE7F3] to-[#FFF1F2]"][index % 4],
+  }));
+
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Analytics" }]} />
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#111827,_#0f766e)] px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
-        <div className="text-xs uppercase tracking-[0.26em] text-white/55">Dedicated analytics page</div>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Executive analytics workspace</h1>
+        <div className="text-xs uppercase tracking-[0.26em] text-white/55">Executive briefing and analytics</div>
+        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Executive intelligence cockpit</h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
-          This route is now a deeper analytics tab page with multiple chart types, wider plant and project comparisons,
-          and richer operational signals for the CEO view.
+          Briefing mode translates document activity, plant momentum, and trust posture into a single decision surface for the executive view.
         </p>
       </section>
+
+      <div className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
+        <SectionCard title="Executive briefing mode" subtitle="A fast, high-signal read on what changed and what matters next">
+          <div className="grid gap-4 md:grid-cols-3">
+            {briefingCards.map((card) => (
+              <button
+                key={card.title}
+                type="button"
+                onClick={() => navigate(card.action)}
+                className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff,#f8fafc)] p-5 text-left transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-[0_20px_40px_rgba(15,23,42,0.08)]"
+              >
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-400">{card.title}</div>
+                <div className="mt-3 text-sm leading-6 text-slate-700">{card.detail}</div>
+                <div className="mt-4 text-sm font-semibold text-[#0A6ED1]">{card.label}</div>
+              </button>
+            ))}
+          </div>
+          <div className="mt-5 rounded-[28px] border border-slate-200 bg-slate-50 p-5">
+            <div className="text-sm font-semibold text-slate-900">This briefing in one sentence</div>
+            <div className="mt-2 text-sm leading-7 text-slate-600">
+              Document activity is {timelineHighlights.growth >= 0 ? "accelerating" : "slowing"} at {`${timelineHighlights.growth >= 0 ? "+" : ""}${timelineHighlights.growth}%`} month over month, {timelineHighlights.mostDocumentedPlant?.plant || "the network"} leads current volume, and the trust posture is holding at {trustScore}/100.
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Trust and security layer" subtitle="Live confidence score across identity, network, session, and document controls">
+          <div className="rounded-[32px] bg-[linear-gradient(135deg,#0f172a,#1e293b)] p-6 text-white">
+            <div className="text-xs uppercase tracking-[0.24em] text-white/50">Trust score</div>
+            <div className="mt-3 text-5xl font-semibold tracking-tight">{trustScore}</div>
+            <div className="mt-2 text-sm text-white/70">
+              {trustScore >= 85 ? "Posture is strong and resilient." : trustScore >= 70 ? "Healthy overall, with some watchpoints." : "Attention needed across governance controls."}
+            </div>
+            <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-[linear-gradient(90deg,#22c55e,#38bdf8)]" style={{ width: `${trustScore}%` }} />
+            </div>
+          </div>
+          <div className="mt-4 space-y-3">
+            {trustPillars.map((pillar) => (
+              <div key={pillar.label} className="rounded-3xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-slate-900">{pillar.label}</div>
+                  <div className="text-sm font-semibold text-slate-900">{pillar.value}/100</div>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-[#0A6ED1]" style={{ width: `${pillar.value}%` }} />
+                </div>
+                <div className="mt-2 text-sm text-slate-500">{pillar.detail}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Upload trend" value={`${timelineHighlights.growth >= 0 ? "+" : ""}${timelineHighlights.growth}%`} hint="Month-over-month document movement." icon={LineChartIcon} onClick={() => navigate("/documents")} />
@@ -1766,6 +2729,30 @@ function AnalyticsPage() {
         <MetricCard label="Busiest category" value={timelineHighlights.busiestCategory?.name || "-"} hint={`${timelineHighlights.busiestCategory?.value || 0} records`} icon={BarChart3} tone="amber" onClick={() => navigate("/documents")} />
         <MetricCard label="Locked records" value={timelineHighlights.totalLocked} hint="Manager-opened records in controlled state." icon={Lock} tone="rose" onClick={() => navigate("/activity-logs")} />
       </div>
+
+      <SectionCard title="Executive analytics signal wall" subtitle="A more visual plant-by-plant read on intensity, governance load, and project spread">
+        <div className="grid gap-4 lg:grid-cols-4">
+          {signalWall.map((item) => (
+            <button
+              key={item.plantId}
+              type="button"
+              onClick={() => navigate(`/plants/${item.plantId}`)}
+              className={`rounded-[30px] border border-white/80 bg-gradient-to-br ${item.tone} p-5 text-left shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(15,23,42,0.12)]`}
+            >
+              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Plant signal</div>
+              <div className="mt-3 text-xl font-semibold text-slate-950">{item.plant}</div>
+              <div className="mt-4 grid gap-2 text-sm text-slate-600">
+                <div>{item.documents} documents</div>
+                <div>{item.projects} projects</div>
+                <div>{item.locked} controlled records</div>
+              </div>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/70">
+                <div className="h-full rounded-full bg-slate-900" style={{ width: `${item.intensity}%` }} />
+              </div>
+            </button>
+          ))}
+        </div>
+      </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionCard title="Monthly uploads and controlled access" subtitle="Line chart with overlay for locked records">
@@ -1942,6 +2929,54 @@ function AnalyticsPage() {
                 />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <SectionCard title="Recent document rhythm" subtitle="The documents most recently shaping executive attention">
+          <div className="space-y-3">
+            {recentDocuments.map((document, index) => (
+              <button
+                key={document.id}
+                type="button"
+                onClick={() => navigate(`/documents/${document.id}`)}
+                className="flex w-full items-start gap-4 rounded-[28px] border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-300"
+              >
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-slate-950 text-sm font-semibold text-white">
+                  {index + 1}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold text-slate-900">{document.name}</div>
+                  <div className="mt-1 text-sm text-slate-500">{document.plant} • {document.category}</div>
+                  <div className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{document.projectName}</div>
+                </div>
+                <div className="text-xs text-slate-400">{formatDate(document.date)}</div>
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Trust watchlist" subtitle="Signals that could erode confidence if left unattended">
+          <div className="grid gap-4 md:grid-cols-2">
+            <button type="button" onClick={() => navigate("/activity-logs")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+              <div className="text-sm font-semibold text-slate-900">Network reviews</div>
+              <div className="mt-2 text-sm text-slate-600">{reviewRules} IP rule entries still need a decision.</div>
+            </button>
+            <button type="button" onClick={() => navigate("/oversight")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+              <div className="text-sm font-semibold text-slate-900">Identity hygiene</div>
+              <div className="mt-2 text-sm text-slate-600">{disabledUsers} accounts are inactive or disabled and should be reviewed.</div>
+            </button>
+            <button type="button" onClick={() => navigate("/settings")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+              <div className="text-sm font-semibold text-slate-900">Session enforcement</div>
+              <div className="mt-2 text-sm text-slate-600">
+                Single-session mode is {portalState.sessionPolicy.enforceSingleSession ? "enforced" : "advisory"} with {portalState.sessionPolicy.autoLogoutMinutes}-minute auto logout.
+              </div>
+            </button>
+            <button type="button" onClick={() => navigate("/documents")} className="rounded-3xl bg-slate-50 p-4 text-left transition hover:bg-slate-100">
+              <div className="text-sm font-semibold text-slate-900">Document control</div>
+              <div className="mt-2 text-sm text-slate-600">{timelineHighlights.totalLocked} manager-locked records can be replayed for controlled review behavior.</div>
+            </button>
           </div>
         </SectionCard>
       </div>
@@ -2250,6 +3285,7 @@ function AdminMasterDataPage() {
   const [plantSubmitting, setPlantSubmitting] = useState(false);
   const [projectSubmitting, setProjectSubmitting] = useState(false);
   const [policySubmitting, setPolicySubmitting] = useState(false);
+  const [showUserPassword, setShowUserPassword] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<EnrichedDocument | null>(null);
   const [documentComments, setDocumentComments] = useState<Comment[]>([]);
   const [editingPlantId, setEditingPlantId] = useState<string | null>(null);
@@ -2437,10 +3473,23 @@ function AdminMasterDataPage() {
   }
 
   async function saveGovernancePolicy() {
+    const normalizedPolicy = normalizeGovernancePolicy(governancePolicy);
+    if (!normalizedPolicy.allowedUploadFormats.length) {
+      setError("Select at least one allowed upload format.");
+      return;
+    }
+    if (!normalizedPolicy.businessHours.allowedDays.length) {
+      setError("Select at least one allowed business day.");
+      return;
+    }
+    if (normalizedPolicy.businessHours.startHour === normalizedPolicy.businessHours.endHour) {
+      setError("Choose different start and end times for manager business hours.");
+      return;
+    }
     setPolicySubmitting(true);
     resetMessages();
     try {
-      const updated = await settingsApi.updateGovernancePolicy(governancePolicy);
+      const updated = await settingsApi.updateGovernancePolicy(normalizedPolicy);
       setGovernancePolicy(updated);
       setNotice("Upload format policy and manager business hours were updated.");
     } catch (err) {
@@ -2557,7 +3606,23 @@ function AdminMasterDataPage() {
               <option value="CEO">CEO</option>
               <option value="Mining Manager">Mining Manager</option>
             </select>
-            <input value={userDraft.password} onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))} placeholder="Temporary password" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <div className="relative">
+              <input
+                type={showUserPassword ? "text" : "password"}
+                value={userDraft.password}
+                onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))}
+                placeholder="Temporary password"
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-12 outline-none transition focus:border-teal-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowUserPassword((current) => !current)}
+                className="absolute inset-y-0 right-2 my-auto inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                aria-label={showUserPassword ? "Hide password" : "Show password"}
+              >
+                {showUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm font-semibold text-slate-900">Assigned plants</div>
               <div className="mt-1 text-xs text-slate-500">Optional for Admin and CEO. Use this to scope Mining Managers.</div>
@@ -2642,34 +3707,55 @@ function AdminMasterDataPage() {
               </label>
             ))}
           </div>
-          <div className="mt-3 text-xs text-slate-500">Managers will only be able to upload files matching the allowed formats selected here.</div>
+          <div className="mt-3 text-xs text-slate-500">
+            Managers will only be able to upload files matching the allowed formats selected here. Current set: {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "None"}.
+          </div>
         </SectionCard>
 
         <SectionCard title="Mining manager business hours" subtitle="Define the permitted working window for all mining-manager sign-ins">
           <div className="grid gap-4 md:grid-cols-3">
             <label className="space-y-2 text-sm">
               <span className="font-medium text-slate-700">Timezone</span>
-              <input value={governancePolicy.businessHours.timezone} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, timezone: event.target.value } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              <select
+                value={governancePolicy.businessHours.timezone}
+                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, timezone: event.target.value } }))}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+              >
+                {GOVERNANCE_TIMEZONES.map((timeZone) => (
+                  <option key={timeZone} value={timeZone}>{timeZone}</option>
+                ))}
+              </select>
             </label>
             <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">Start hour</span>
-              <input type="number" min={0} max={23} value={governancePolicy.businessHours.startHour} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, startHour: Number(event.target.value) || 0 } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              <span className="font-medium text-slate-700">Start time</span>
+              <select
+                value={governancePolicy.businessHours.startHour}
+                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, startHour: Number(event.target.value) } }))}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+              >
+                {GOVERNANCE_TIME_OPTIONS.map((option) => (
+                  <option key={`start-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
             <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">End hour</span>
-              <input type="number" min={1} max={24} value={governancePolicy.businessHours.endHour} onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, endHour: Number(event.target.value) || 0 } }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              <span className="font-medium text-slate-700">End time</span>
+              <select
+                value={governancePolicy.businessHours.endHour}
+                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, endHour: Number(event.target.value) } }))}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+              >
+                {GOVERNANCE_TIME_OPTIONS.map((option) => (
+                  <option key={`end-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </label>
           </div>
+          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Active window: {describeBusinessHours(governancePolicy)}
+          </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {[
-              { label: "Mon", value: 0 },
-              { label: "Tue", value: 1 },
-              { label: "Wed", value: 2 },
-              { label: "Thu", value: 3 },
-              { label: "Fri", value: 4 },
-              { label: "Sat", value: 5 },
-              { label: "Sun", value: 6 },
-            ].map((day) => (
+            {BUSINESS_DAY_OPTIONS.map((day) => (
               <label key={`day-${day.value}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
                 <span>{day.label}</span>
                 <input
@@ -3926,6 +5012,7 @@ function AppContent() {
           { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><ProjectDocumentsPage /></RoleGate> },
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentDetailPage /></RoleGate> },
+          { path: "messages", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><MessagingPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "oversight/:userId", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
