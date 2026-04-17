@@ -51,6 +51,22 @@ export function DocumentDrawer({
   const showCommentComposer = Boolean(onAddComment);
   const hasAttachedFile = Boolean(doc.file?.storageId);
   const showUpdateForm = Boolean(onUpdateDocument);
+  const detailRows = [
+    ["Document ID", doc.id],
+    ["Document Name", doc.name],
+    ["Company", doc.company || "Midwest Ltd"],
+    ["Plant", doc.plant],
+    ["Plant ID", doc.plantId],
+    ["Category", doc.category],
+    ["Uploaded By", doc.uploadedBy],
+    ["Upload Date", doc.date || "-"],
+    ["Version", `v${doc.version}`],
+    ["Original File", fileName || doc.file?.name || "Not attached"],
+    ["File Type", doc.file?.contentType || "Not available"],
+    ["File Size", formatFileSize(doc.file?.sizeBytes)],
+    ["Created At", doc.createdAt || "-"],
+    ["Last Updated", doc.updatedAt || "-"],
+  ];
 
   useEffect(() => {
     if (!autoFocusCommentComposer || !showCommentComposer) return;
@@ -124,257 +140,326 @@ export function DocumentDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
-      <div className="relative w-full max-w-[540px] bg-white border-l border-[#d9d9d9] h-full flex flex-col">
-        <div className="h-11 bg-[#354A5F] flex items-center justify-between px-4 shrink-0">
-          <span className="text-white" style={{ fontSize: 13, fontWeight: 500 }}>
-            Document Details
-          </span>
-          <button onClick={onClose} className="text-white/70 hover:text-white cursor-pointer">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-auto p-5">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>
-                Original Document
+      <div className="absolute inset-0 bg-[#0c1628]/32 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[600px] overflow-hidden border-l border-[#d9e1ec] bg-[#f5f8fc] shadow-2xl">
+        <div className="flex h-full flex-col">
+          <div className="shrink-0 border-b border-white/10 bg-[linear-gradient(135deg,#111827_0%,#243b53_100%)] px-6 py-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/55">
+                  Document Workspace
+                </div>
+                <span className="mt-2 block text-white" style={{ fontSize: 22, fontWeight: 600 }}>
+                  Document Details
+                </span>
+                <p className="mt-1 text-sm text-white/72">
+                  Review metadata, manage the original file, and keep notes in one place.
+                </p>
               </div>
-              <div className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
-                The file preview is hidden here. Use the file actions to open or download the original upload.
-              </div>
-            </div>
-            {hasAttachedFile && (
               <button
-                onClick={() => void handleDownload()}
-                className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-1.5 cursor-pointer"
-                style={{ fontSize: 12 }}
+                onClick={onClose}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/12 bg-white/6 text-white/70 transition hover:bg-white/10 hover:text-white cursor-pointer"
               >
-                <Download size={12} /> Download
+                <X size={18} />
               </button>
-            )}
-          </div>
-
-          <div className="mb-5">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h4 className="text-[#333]" style={{ fontSize: 14, fontWeight: 500 }}>
-                Document Details
-              </h4>
-              {showUpdateForm && (
-                <button
-                  onClick={() => {
-                    setEditing((prev) => !prev);
-                    setUpdateError("");
-                  }}
-                  className="h-8 px-3 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] cursor-pointer"
-                  style={{ fontSize: 12 }}
-                >
-                  {editing ? "Cancel Edit" : "Edit Upload"}
-                </button>
-              )}
             </div>
-
-            {editing ? (
-              <div className="space-y-4 border border-[#d9d9d9] bg-[#fafbfd] p-4">
-                <div>
-                  <label className="block text-[#444] mb-1.5" style={{ fontSize: 12, fontWeight: 500 }}>Document Name</label>
-                  <input
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
-                    className="w-full h-9 px-3 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none"
-                    style={{ fontSize: 13 }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[#444] mb-1.5" style={{ fontSize: 12, fontWeight: 500 }}>Category</label>
-                  <select
-                    value={editForm.category}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, category: e.target.value }))}
-                    className="w-full h-9 px-3 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none"
-                    style={{ fontSize: 13 }}
-                  >
-                    {categoryOptions.map((category) => (
-                      <option key={category} value={category}>{category}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[#444] mb-1.5" style={{ fontSize: 12, fontWeight: 500 }}>Company</label>
-                  <input
-                    value={editForm.company}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, company: e.target.value }))}
-                    className="w-full h-9 px-3 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none"
-                    style={{ fontSize: 13 }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[#444] mb-1.5" style={{ fontSize: 12, fontWeight: 500 }}>Upload Note</label>
-                  <textarea
-                    value={editForm.uploadComment}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, uploadComment: e.target.value }))}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none resize-none"
-                    style={{ fontSize: 13 }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-[#444] mb-1.5" style={{ fontSize: 12, fontWeight: 500 }}>Replace Uploaded File</label>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    onChange={(e) => setReplacementFile(e.target.files?.[0] || null)}
-                    className="block w-full text-[#333]"
-                    style={{ fontSize: 12 }}
-                  />
-                  <div className="text-[#6a6d70] mt-1" style={{ fontSize: 11 }}>
-                    {replacementFile ? replacementFile.name : "Leave empty to keep the current file."}
-                  </div>
-                </div>
-                {updateError && (
-                  <div className="text-[#BB0000]" style={{ fontSize: 12 }}>
-                    {updateError}
-                  </div>
-                )}
-                <button
-                  onClick={() => void handleUpdate()}
-                  disabled={!editForm.name.trim() || !editForm.category.trim() || updating}
-                  className="h-8 px-4 bg-[#0A6ED1] text-white hover:bg-[#0854A0] disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 cursor-pointer"
-                  style={{ fontSize: 12 }}
-                >
-                  <Save size={13} /> {updating ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {[
-                  ["Document ID", doc.id],
-                  ["Document Name", doc.name],
-                  ["Company", doc.company || "Midwest Ltd"],
-                  ["Plant", doc.plant],
-                  ["Plant ID", doc.plantId],
-                  ["Category", doc.category],
-                  ["Uploaded By", doc.uploadedBy],
-                  ["Upload Date", doc.date || "-"],
-                  ["Version", `v${doc.version}`],
-                  ["Original File", fileName || doc.file?.name || "Not attached"],
-                  ["File Type", doc.file?.contentType || "Not available"],
-                  ["File Size", formatFileSize(doc.file?.sizeBytes)],
-                  ["Created At", doc.createdAt || "-"],
-                  ["Last Updated", doc.updatedAt || "-"],
-                ].map(([label, value]) => (
-                  <div key={label} className="flex" style={{ fontSize: 13 }}>
-                    <span className="w-36 text-[#6a6d70] shrink-0">{label}</span>
-                    <span className="text-[#333]">{value}</span>
-                  </div>
-                ))}
-                {doc.uploadComment && (
-                  <div className="flex" style={{ fontSize: 13 }}>
-                    <span className="w-36 text-[#6a6d70] shrink-0">Upload Note</span>
-                    <span className="text-[#333] italic">{doc.uploadComment}</span>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
-          {(showCommentComposer || comments.length > 0) && (
-            <div className="border-t border-[#d9d9d9] pt-4">
-              <div className="flex items-center gap-2 mb-3">
-                <MessageSquare size={14} className="text-[#0A6ED1]" />
-                <h4 className="text-[#333]" style={{ fontSize: 14, fontWeight: 500 }}>
-                  Executive Notes
-                </h4>
-              </div>
-
-              {showCommentComposer && (
-                <div className="bg-[#f7f9fd] border border-[#d9d9d9] p-3 mb-4">
-                  <textarea
-                    ref={commentInputRef}
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    placeholder="Add a note on this document..."
-                    rows={3}
-                    className="w-full px-3 py-2 border border-[#d9d9d9] bg-white text-[#333] placeholder-[#bbb] focus:border-[#0A6ED1] focus:outline-none resize-none mb-3"
-                    style={{ fontSize: 13 }}
-                  />
-
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-[#6a6d70]" style={{ fontSize: 12 }}>
-                      Visibility:
-                    </span>
-                    <div className="flex border border-[#d9d9d9] overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setVisibility("private")}
-                        className={`flex items-center gap-1.5 px-3 h-7 cursor-pointer transition-colors ${
-                          visibility === "private" ? "bg-[#354A5F] text-white" : "bg-white text-[#6a6d70] hover:bg-[#f5f5f5]"
-                        }`}
-                        style={{ fontSize: 12 }}
-                      >
-                        <Lock size={11} /> Private
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setVisibility("public")}
-                        className={`flex items-center gap-1.5 px-3 h-7 cursor-pointer transition-colors border-l border-[#d9d9d9] ${
-                          visibility === "public" ? "bg-[#0A6ED1] text-white" : "bg-white text-[#6a6d70] hover:bg-[#f5f5f5]"
-                        }`}
-                        style={{ fontSize: 12 }}
-                      >
-                        <Globe size={11} /> Public
-                      </button>
+          <div className="flex-1 overflow-auto px-5 py-5 sm:px-6">
+            <div className="space-y-5">
+              <section className="rounded-[28px] border border-[#dce4f0] bg-white p-5 shadow-[0_18px_55px_rgba(17,24,39,0.08)]">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[#1f2937]" style={{ fontSize: 18, fontWeight: 600 }}>
+                      {doc.name}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
+                      <span className="rounded-full bg-[#e8f0fb] px-3 py-1 font-medium text-[#0A6ED1]">
+                        {doc.category}
+                      </span>
+                      <span className="rounded-full bg-[#eef3f8] px-3 py-1 font-medium text-[#47607a]">
+                        {doc.plant}
+                      </span>
+                      <span className="rounded-full bg-[#f4f6fb] px-3 py-1 text-[#6a7685]">
+                        v{doc.version}
+                      </span>
                     </div>
                   </div>
-
-                  <button
-                    onClick={() => void handleSave()}
-                    disabled={!commentText.trim() || saving}
-                    className="h-8 px-4 bg-[#0A6ED1] text-white hover:bg-[#0854A0] disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5 cursor-pointer"
-                    style={{ fontSize: 12 }}
-                  >
-                    <Save size={13} /> {saving ? "Saving..." : "Save Note"}
-                  </button>
+                  <div className="min-w-[180px] rounded-2xl border border-[#e6edf5] bg-[#f8fbff] px-4 py-3">
+                    <div className="text-[#66788a]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                      Uploaded By
+                    </div>
+                    <div className="mt-1 text-[#1f2937]" style={{ fontSize: 14, fontWeight: 600 }}>
+                      {doc.uploadedBy}
+                    </div>
+                    <div className="mt-1 text-[#718096]" style={{ fontSize: 12 }}>
+                      {doc.date || "Date unavailable"}
+                    </div>
+                  </div>
                 </div>
-              )}
+              </section>
 
-              {comments.length > 0 ? (
-                <div className="space-y-2">
-                  {comments.map((comment) => (
-                    <div
-                      key={comment.id}
-                      className={`border p-3 ${
-                        comment.visibility === "private" ? "bg-[#fdfaf3] border-[#e8d9a0]" : "bg-[#f5f9ff] border-[#c5d9f0]"
-                      }`}
+              <section className="rounded-[28px] border border-[#dce4f0] bg-white p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[#1f2937]" style={{ fontSize: 16, fontWeight: 600 }}>
+                      Original Document
+                    </div>
+                    <p className="mt-1 max-w-[28rem] text-[#66788a]" style={{ fontSize: 13, lineHeight: 1.6 }}>
+                      The file preview is hidden here. Use the actions below to open or download the original upload.
+                    </p>
+                  </div>
+                  {hasAttachedFile && (
+                    <button
+                      onClick={() => void handleDownload()}
+                      className="inline-flex h-10 items-center gap-2 rounded-full border border-[#d6e1ee] bg-[#f8fbff] px-4 text-[#27415e] transition hover:border-[#b8cadf] hover:bg-[#eef5fc] cursor-pointer"
+                      style={{ fontSize: 13, fontWeight: 500 }}
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-[#333] flex-1" style={{ fontSize: 13 }}>
-                          {comment.text}
-                        </p>
-                        <span
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 shrink-0 ${
-                            comment.visibility === "private" ? "bg-[#f5e9c0] text-[#7a5c00]" : "bg-[#dceeff] text-[#0A6ED1]"
-                          }`}
-                          style={{ fontSize: 10, fontWeight: 500 }}
-                        >
-                          {comment.visibility === "private" ? <><Lock size={9} /> Private</> : <><Globe size={9} /> Public</>}
-                        </span>
+                      <Download size={14} /> Download
+                    </button>
+                  )}
+                </div>
+                {fileError && (
+                  <div className="mt-4 rounded-2xl border border-[#f0c4c4] bg-[#fff5f5] px-4 py-3 text-[#BB0000]" style={{ fontSize: 12 }}>
+                    {fileError}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-[28px] border border-[#dce4f0] bg-white p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[#1f2937]" style={{ fontSize: 16, fontWeight: 600 }}>
+                      Metadata
+                    </h4>
+                    <p className="mt-1 text-[#66788a]" style={{ fontSize: 13 }}>
+                      Keep the document profile aligned with the rest of the registry.
+                    </p>
+                  </div>
+                  {showUpdateForm && (
+                    <button
+                      onClick={() => {
+                        setEditing((prev) => !prev);
+                        setUpdateError("");
+                      }}
+                      className={`inline-flex h-10 items-center rounded-full border px-4 transition cursor-pointer ${
+                        editing
+                          ? "border-[#f2d1d1] bg-[#fff6f6] text-[#8b3d3d] hover:bg-[#ffefef]"
+                          : "border-[#d6e1ee] bg-[#f8fbff] text-[#27415e] hover:border-[#b8cadf] hover:bg-[#eef5fc]"
+                      }`}
+                      style={{ fontSize: 13, fontWeight: 500 }}
+                    >
+                      {editing ? "Cancel Edit" : "Edit Upload"}
+                    </button>
+                  )}
+                </div>
+
+                {editing ? (
+                  <div className="space-y-4 rounded-[24px] border border-[#e4ebf3] bg-[#f8fbff] p-4">
+                    <div>
+                      <label className="mb-2 block text-[#425466]" style={{ fontSize: 12, fontWeight: 600 }}>Document Name</label>
+                      <input
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                        className="h-11 w-full rounded-2xl border border-[#d6e1ee] bg-white px-4 text-[#1f2937] transition focus:border-[#0A6ED1] focus:outline-none focus:ring-4 focus:ring-[#0A6ED1]/10"
+                        style={{ fontSize: 14 }}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-[#425466]" style={{ fontSize: 12, fontWeight: 600 }}>Category</label>
+                      <select
+                        value={editForm.category}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, category: e.target.value }))}
+                        className="h-11 w-full rounded-2xl border border-[#d6e1ee] bg-white px-4 text-[#1f2937] transition focus:border-[#0A6ED1] focus:outline-none focus:ring-4 focus:ring-[#0A6ED1]/10"
+                        style={{ fontSize: 14 }}
+                      >
+                        {categoryOptions.map((category) => (
+                          <option key={category} value={category}>{category}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-[#425466]" style={{ fontSize: 12, fontWeight: 600 }}>Company</label>
+                      <input
+                        value={editForm.company}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, company: e.target.value }))}
+                        className="h-11 w-full rounded-2xl border border-[#d6e1ee] bg-white px-4 text-[#1f2937] transition focus:border-[#0A6ED1] focus:outline-none focus:ring-4 focus:ring-[#0A6ED1]/10"
+                        style={{ fontSize: 14 }}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-[#425466]" style={{ fontSize: 12, fontWeight: 600 }}>Upload Note</label>
+                      <textarea
+                        value={editForm.uploadComment}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, uploadComment: e.target.value }))}
+                        rows={4}
+                        className="w-full rounded-2xl border border-[#d6e1ee] bg-white px-4 py-3 text-[#1f2937] transition focus:border-[#0A6ED1] focus:outline-none focus:ring-4 focus:ring-[#0A6ED1]/10 resize-none"
+                        style={{ fontSize: 14 }}
+                      />
+                    </div>
+                    <div className="rounded-2xl border border-dashed border-[#cdd9e7] bg-white px-4 py-4">
+                      <label className="mb-2 block text-[#425466]" style={{ fontSize: 12, fontWeight: 600 }}>Replace Uploaded File</label>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        onChange={(e) => setReplacementFile(e.target.files?.[0] || null)}
+                        className="block w-full text-[#334155]"
+                        style={{ fontSize: 13 }}
+                      />
+                      <div className="mt-2 text-[#718096]" style={{ fontSize: 12 }}>
+                        {replacementFile ? replacementFile.name : "Leave empty to keep the current file."}
                       </div>
-                      <p className="text-[#6a6d70] mt-1" style={{ fontSize: 11 }}>
-                        {comment.author} · {comment.date || "-"}
+                    </div>
+                    {updateError && (
+                      <div className="rounded-2xl border border-[#f0c4c4] bg-[#fff5f5] px-4 py-3 text-[#BB0000]" style={{ fontSize: 12 }}>
+                        {updateError}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => void handleUpdate()}
+                      disabled={!editForm.name.trim() || !editForm.category.trim() || updating}
+                      className="inline-flex h-11 items-center gap-2 rounded-full bg-[#0A6ED1] px-5 text-white shadow-[0_10px_24px_rgba(10,110,209,0.28)] transition hover:bg-[#0854A0] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                      style={{ fontSize: 13, fontWeight: 600 }}
+                    >
+                      <Save size={14} /> {updating ? "Saving..." : "Save Changes"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {detailRows.map(([label, value]) => (
+                      <div key={label} className="rounded-2xl border border-[#e7edf5] bg-[#fbfcfe] px-4 py-3">
+                        <div className="text-[#718096]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                          {label}
+                        </div>
+                        <div className="mt-1 break-words text-[#1f2937]" style={{ fontSize: 14, fontWeight: 500 }}>
+                          {value}
+                        </div>
+                      </div>
+                    ))}
+                    {doc.uploadComment && (
+                      <div className="rounded-2xl border border-[#dbe7f3] bg-[#f6faff] px-4 py-4 sm:col-span-2">
+                        <div className="text-[#718096]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                          Upload Note
+                        </div>
+                        <div className="mt-2 text-[#27415e]" style={{ fontSize: 14, lineHeight: 1.7 }}>
+                          {doc.uploadComment}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {(showCommentComposer || comments.length > 0) && (
+                <section className="rounded-[28px] border border-[#dce4f0] bg-white p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#e8f0fb] text-[#0A6ED1]">
+                      <MessageSquare size={16} />
+                    </div>
+                    <div>
+                      <h4 className="text-[#1f2937]" style={{ fontSize: 16, fontWeight: 600 }}>
+                        Executive Notes
+                      </h4>
+                      <p className="text-[#66788a]" style={{ fontSize: 13 }}>
+                        Capture internal context and optional shared updates.
                       </p>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                !showCommentComposer && (
-                  <p className="text-[#6a6d70]" style={{ fontSize: 12 }}>
-                    No visible notes yet.
-                  </p>
-                )
+                  </div>
+
+                  {showCommentComposer && (
+                    <div className="mb-4 rounded-[24px] border border-[#e4ebf3] bg-[#f8fbff] p-4">
+                      <textarea
+                        ref={commentInputRef}
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        placeholder="Add a note on this document..."
+                        rows={4}
+                        className="mb-4 w-full rounded-2xl border border-[#d6e1ee] bg-white px-4 py-3 text-[#1f2937] placeholder-[#9aa7b6] transition focus:border-[#0A6ED1] focus:outline-none focus:ring-4 focus:ring-[#0A6ED1]/10 resize-none"
+                        style={{ fontSize: 14 }}
+                      />
+
+                      <div className="mb-4 flex flex-wrap items-center gap-2">
+                        <span className="text-[#66788a]" style={{ fontSize: 12, fontWeight: 500 }}>
+                          Visibility
+                        </span>
+                        <div className="inline-flex rounded-full border border-[#d6e1ee] bg-white p-1">
+                          <button
+                            type="button"
+                            onClick={() => setVisibility("private")}
+                            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 transition cursor-pointer ${
+                              visibility === "private" ? "bg-[#354A5F] text-white shadow-sm" : "text-[#6a7685] hover:bg-[#f4f7fb]"
+                            }`}
+                            style={{ fontSize: 12, fontWeight: 500 }}
+                          >
+                            <Lock size={12} /> Private
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVisibility("public")}
+                            className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3 transition cursor-pointer ${
+                              visibility === "public" ? "bg-[#0A6ED1] text-white shadow-sm" : "text-[#6a7685] hover:bg-[#f4f7fb]"
+                            }`}
+                            style={{ fontSize: 12, fontWeight: 500 }}
+                          >
+                            <Globe size={12} /> Public
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => void handleSave()}
+                        disabled={!commentText.trim() || saving}
+                        className="inline-flex h-11 items-center gap-2 rounded-full bg-[#0A6ED1] px-5 text-white shadow-[0_10px_24px_rgba(10,110,209,0.28)] transition hover:bg-[#0854A0] disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                        style={{ fontSize: 13, fontWeight: 600 }}
+                      >
+                        <Save size={14} /> {saving ? "Saving..." : "Save Note"}
+                      </button>
+                    </div>
+                  )}
+
+                  {comments.length > 0 ? (
+                    <div className="space-y-3">
+                      {comments.map((comment) => (
+                        <div
+                          key={comment.id}
+                          className={`rounded-2xl border px-4 py-4 ${
+                            comment.visibility === "private"
+                              ? "border-[#ecdca6] bg-[#fffaf0]"
+                              : "border-[#d8e5f4] bg-[#f7fbff]"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="flex-1 text-[#1f2937]" style={{ fontSize: 14, lineHeight: 1.65 }}>
+                              {comment.text}
+                            </p>
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 shrink-0 ${
+                                comment.visibility === "private"
+                                  ? "bg-[#f5e9c0] text-[#7a5c00]"
+                                  : "bg-[#dceeff] text-[#0A6ED1]"
+                              }`}
+                              style={{ fontSize: 11, fontWeight: 600 }}
+                            >
+                              {comment.visibility === "private" ? <><Lock size={10} /> Private</> : <><Globe size={10} /> Public</>}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[#6a7685]" style={{ fontSize: 12 }}>
+                            {comment.author} · {comment.date || "-"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    !showCommentComposer && (
+                      <p className="rounded-2xl border border-dashed border-[#d6e1ee] bg-[#fbfdff] px-4 py-5 text-[#6a7685]" style={{ fontSize: 13 }}>
+                        No visible notes yet.
+                      </p>
+                    )
+                  )}
+                </section>
               )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

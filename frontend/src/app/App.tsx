@@ -21,8 +21,10 @@ import {
   LineChart as LineChartIcon,
   Lock,
   LogOut,
+  MessageSquare,
   Network,
   Plus,
+  Save,
   Search,
   Settings,
   ShieldCheck,
@@ -1432,9 +1434,12 @@ function FilterField({ icon: Icon, label, children }: { icon: React.ComponentTyp
 
 function DocumentDetailPage() {
   const { documentId } = useParams();
-  const { user, documents, markDocumentLocked } = usePortal();
+  const { user, documents, markDocumentLocked, refreshData } = usePortal();
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentError, setCommentError] = useState("");
+  const [commentText, setCommentText] = useState("");
+  const [commentVisibility, setCommentVisibility] = useState<"private" | "public">("private");
+  const [commentSaving, setCommentSaving] = useState(false);
   const document = documents.find((item) => item.id === documentId);
 
   useEffect(() => {
@@ -1449,6 +1454,23 @@ function DocumentDetailPage() {
       markDocumentLocked(documentId);
     }
   }, [documentId, markDocumentLocked, user.role]);
+
+  async function handleAddComment() {
+    if (!documentId || !commentText.trim() || user.role !== "CEO") return;
+    setCommentSaving(true);
+    setCommentError("");
+    try {
+      const created = await documentsApi.addComment(documentId, commentText.trim(), commentVisibility);
+      setComments((prev) => [created, ...prev]);
+      setCommentText("");
+      setCommentVisibility("private");
+      await refreshData();
+    } catch (error) {
+      setCommentError(error instanceof Error ? error.message : "Unable to save this note.");
+    } finally {
+      setCommentSaving(false);
+    }
+  }
 
   if (!document) return <NotFoundCard title="Document not found" body="This document is no longer available in the current filtered workspace." />;
 
@@ -1515,6 +1537,76 @@ function DocumentDetailPage() {
                 : "No lock has been applied yet."}
             </div>
           </div>
+          {user.role === "CEO" ? (
+            <div className="mt-4 rounded-[28px] border border-[#dbe7f3] bg-[#f8fbff] p-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8f0fb] text-[#0A6ED1]">
+                  <MessageSquare size={18} />
+                </div>
+                <div>
+                  <div className="text-base font-semibold text-slate-900">Add CEO note</div>
+                  <div className="mt-1 text-sm leading-6 text-slate-600">
+                    Private notes are visible only to you. Public notes are visible to you and the document uploader.
+                  </div>
+                </div>
+              </div>
+              <textarea
+                value={commentText}
+                onChange={(event) => setCommentText(event.target.value)}
+                placeholder="Add a note about this document..."
+                rows={4}
+                className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-[#0A6ED1]"
+              />
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setCommentVisibility("private")}
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                      commentVisibility === "private"
+                        ? "bg-slate-800 text-white"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Lock size={14} />
+                      Private
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCommentVisibility("public")}
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                      commentVisibility === "public"
+                        ? "bg-[#0A6ED1] text-white"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Globe size={14} />
+                      Public
+                    </span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleAddComment()}
+                  disabled={!commentText.trim() || commentSaving}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Save size={14} />
+                    {commentSaving ? "Saving..." : "Save note"}
+                  </span>
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {commentError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {commentError}
+            </div>
+          ) : null}
           <div className="mt-4 space-y-3">
             {comments.map((comment) => (
               <div key={comment.id} className="rounded-3xl border border-slate-200 bg-white p-4">
