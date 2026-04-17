@@ -74,7 +74,7 @@ import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { DocumentDrawer } from "./components/document-drawer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { AuthProvider, useAuth } from "./lib/auth";
-import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, messagesApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
+import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
   createProject,
   defaultPortalState,
@@ -99,7 +99,7 @@ import {
   type ProjectRecord,
   type SessionPolicy,
 } from "./lib/portal";
-import type { Activity, Comment, DocumentConversationMessage, DocumentRecord, GovernancePolicy, MessageEntry, MessageThread, NotificationItem, OutsideHoursAttempt, Plant, SessionRecord, User, UserRole } from "./lib/types";
+import type { Activity, Comment, DocumentConversationMessage, DocumentRecord, GovernancePolicy, NotificationItem, OutsideHoursAttempt, Plant, SessionRecord, User, UserRole } from "./lib/types";
 
 type PortalContextValue = {
   user: User;
@@ -599,35 +599,45 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
   const { user, notifications, portalState } = usePortal();
   const { can } = useRoleAccess();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
+  const [notificationItems, setNotificationItems] = useState<NotificationItem[]>(notifications);
+  const [clearingNotifications, setClearingNotifications] = useState(false);
   const navigate = useNavigate();
-  const location = useLocation();
   const isCeo = user.role === "CEO";
+  const unreadNotificationCount = useMemo(
+    () => notificationItems.filter((item) => !item.read).length,
+    [notificationItems],
+  );
 
   useEffect(() => {
-    let cancelled = false;
+    setNotificationItems(notifications);
+  }, [notifications]);
 
-    async function loadUnreadCount() {
-      try {
-        const threads = await messagesApi.listThreads();
-        if (cancelled) return;
-        setMessageUnreadCount(threads.reduce((total, thread) => total + (thread.unreadCount || 0), 0));
-      } catch {
-        if (cancelled) return;
-        setMessageUnreadCount(0);
-      }
+  async function handleNotificationOpen(item: NotificationItem) {
+    setNotificationsOpen(false);
+    setNotificationItems((current) => current.map((entry) => (
+      entry.id === item.id ? { ...entry, read: true, readAt: entry.readAt || new Date().toISOString() } : entry
+    )));
+    try {
+      await notificationsApi.markRead(item.id);
+    } catch {
+      // Ignore generated notification ids that are not persisted server-side.
     }
+    navigate(item.href || defaultHome(user.role));
+  }
 
-    void loadUnreadCount();
-    const interval = window.setInterval(() => {
-      void loadUnreadCount();
-    }, LIVE_SYNC_INTERVAL_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [location.pathname]);
+  async function handleClearNotifications() {
+    setClearingNotifications(true);
+    setNotificationItems((current) => current.map((item) => (
+      item.read ? item : { ...item, read: true, readAt: item.readAt || new Date().toISOString() }
+    )));
+    try {
+      await notificationsApi.markAllRead();
+    } catch {
+      // Keep local clear-all behavior even if some notifications are generated client-side.
+    } finally {
+      setClearingNotifications(false);
+    }
+  }
 
   const navGroups = useMemo<NavItem[][]>(() => {
     const common: NavItem[] = [{ label: "Settings", path: user.role === "Admin" ? "/admin/settings" : "/settings", icon: Settings }];
@@ -644,7 +654,6 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
-          { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
           { label: "Analytics", path: "/analytics", icon: LineChartIcon },
           { label: "Audit Logs", path: "/activity-logs", icon: Clock3 },
           ...governance,
@@ -658,7 +667,6 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
           { label: "Documents", path: "/documents", icon: FileText },
-          { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
           { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus, capability: "canCreateProjects" },
           { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
         ],
@@ -670,7 +678,6 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
         { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
         { label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" },
-        { label: "Messages", path: "/messages", icon: MessageSquare, badgeCount: messageUnreadCount },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
         { label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" },
         { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
@@ -678,7 +685,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       ],
       common,
     ];
-  }, [can, messageUnreadCount, user]);
+  }, [can, user]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.12),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(91,115,139,0.10),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] text-slate-900">
@@ -709,15 +716,35 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
             <div className="relative">
               <button
                 onClick={() => setNotificationsOpen((prev) => !prev)}
-                className="rounded-full border border-white/15 bg-white/5 p-2 transition hover:bg-white/10"
+                className="relative rounded-full border border-white/15 bg-white/5 p-2 transition hover:bg-white/10"
               >
                 <Bell size={16} />
+                {unreadNotificationCount > 0 ? (
+                  <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-[#0A6ED1] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                  </span>
+                ) : null}
               </button>
               {notificationsOpen ? (
                 <div className="absolute right-0 top-12 w-80 rounded-3xl border border-white/10 bg-slate-900 p-3 shadow-2xl">
-                  <div className="mb-3 text-sm font-semibold text-white">Notifications</div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Notifications</div>
+                      <div className="mt-1 text-xs text-white/55">
+                        {unreadNotificationCount} unread
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={clearingNotifications || !notificationItems.length}
+                      onClick={() => void handleClearNotifications()}
+                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {clearingNotifications ? "Clearing..." : "Clear all"}
+                    </button>
+                  </div>
                   <div className="space-y-2">
-                    {(notifications.length ? notifications : [{
+                    {(notificationItems.length ? notificationItems : [{
                       id: "placeholder",
                       userId: user.id,
                       title: "No new alerts",
@@ -729,13 +756,17 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
                     }]).slice(0, 4).map((item) => (
                       <button
                         key={item.id}
-                        onClick={() => {
-                          setNotificationsOpen(false);
-                          navigate(item.href || defaultHome(user.role));
-                        }}
-                        className="w-full rounded-2xl border border-white/10 bg-white/5 p-3 text-left hover:bg-white/10"
+                        onClick={() => void handleNotificationOpen(item)}
+                        className={`w-full rounded-2xl border p-3 text-left ${
+                          item.read
+                            ? "border-white/10 bg-white/5 hover:bg-white/10"
+                            : "border-[#0A6ED1]/40 bg-[#0A6ED1]/12 hover:bg-[#0A6ED1]/18"
+                        }`}
                       >
-                        <div className="text-sm font-medium text-white">{item.title}</div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-sm font-medium text-white">{item.title}</div>
+                          {!item.read ? <span className="mt-1 h-2.5 w-2.5 rounded-full bg-[#2E90FF]" /> : null}
+                        </div>
                         <div className="mt-1 text-xs text-white/60">{item.detail}</div>
                       </button>
                     ))}
@@ -1934,547 +1965,6 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
     <div className="rounded-2xl bg-slate-50 p-4">
       <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
       <div className={`mt-2 text-sm font-medium text-slate-900 ${mono ? "font-mono" : ""}`}>{value}</div>
-    </div>
-  );
-}
-
-function MessagingPage() {
-  const { user, documents } = usePortal();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const requestedThreadId = searchParams.get("threadId") || "";
-  const [contacts, setContacts] = useState<User[]>([]);
-  const [threads, setThreads] = useState<MessageThread[]>([]);
-  const [selectedThreadId, setSelectedThreadId] = useState("");
-  const [messages, setMessages] = useState<MessageEntry[]>([]);
-  const [loadingThreads, setLoadingThreads] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [workspaceError, setWorkspaceError] = useState("");
-  const [threadSearch, setThreadSearch] = useState("");
-  const [showNewChat, setShowNewChat] = useState(false);
-  const [composerText, setComposerText] = useState("");
-  const [selectedComposerDocumentIds, setSelectedComposerDocumentIds] = useState<string[]>([]);
-  const [newThreadTitle, setNewThreadTitle] = useState("");
-  const [newThreadOpeningText, setNewThreadOpeningText] = useState("");
-  const [newThreadParticipantIds, setNewThreadParticipantIds] = useState<string[]>([]);
-  const [newThreadDocumentIds, setNewThreadDocumentIds] = useState<string[]>([]);
-  const [creatingThread, setCreatingThread] = useState(false);
-  const [postingMessage, setPostingMessage] = useState(false);
-
-  const availableRecipients = useMemo(
-    () => contacts.filter((candidate) => candidate.id !== user.id && candidate.status === "Active"),
-    [contacts, user.id],
-  );
-
-  const selectableDocuments = useMemo(
-    () => documents.slice(0, 40),
-    [documents],
-  );
-
-  const selectedThread = threads.find((thread) => thread.id === selectedThreadId) || null;
-  const filteredThreads = useMemo(() => {
-    const query = threadSearch.trim().toLowerCase();
-    if (!query) return threads;
-    return threads.filter((thread) => {
-      const title = (thread.title || "").toLowerCase();
-      const participants = thread.participants.map((participant) => participant.name.toLowerCase()).join(" ");
-      const preview = (thread.lastMessagePreview || "").toLowerCase();
-      return `${title} ${participants} ${preview}`.includes(query);
-    });
-  }, [threadSearch, threads]);
-
-  function getThreadName(thread: MessageThread) {
-    return (
-      thread.title
-      || thread.participants.filter((participant) => participant.id !== user.id).map((participant) => participant.name).join(", ")
-      || "Untitled thread"
-    );
-  }
-
-  function getReceiptLabel(message: MessageEntry) {
-    if (message.authorId !== user.id || !message.receiptStatus) return "";
-    if (message.receiptStatus === "read") {
-      if (message.recipientCount > 1) {
-        return message.readByCount >= message.recipientCount
-          ? "Read by all"
-          : `Read by ${message.readByCount}/${message.recipientCount}`;
-      }
-      return message.readByNames[0] ? `Read by ${message.readByNames[0]}` : "Read";
-    }
-    if (message.receiptStatus === "delivered") {
-      return message.recipientCount > 1
-        ? `Delivered to ${message.recipientCount}`
-        : "Delivered";
-    }
-    return "Sent";
-  }
-
-  async function loadThreads(preferredThreadId?: string) {
-    setLoadingThreads(true);
-    try {
-      const result = await messagesApi.listThreads();
-      setThreads(result);
-      setSelectedThreadId((current) => {
-        if (preferredThreadId && result.some((thread) => thread.id === preferredThreadId)) {
-          return preferredThreadId;
-        }
-        if (requestedThreadId && result.some((thread) => thread.id === requestedThreadId)) {
-          return requestedThreadId;
-        }
-        if (current && result.some((thread) => thread.id === current)) {
-          return current;
-        }
-        return result[0]?.id || "";
-      });
-      setWorkspaceError("");
-    } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : "Unable to load messages.");
-    } finally {
-      setLoadingThreads(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadThreads();
-  }, [requestedThreadId]);
-
-  useEffect(() => {
-    messagesApi
-      .listContacts()
-      .then((result) => {
-        setContacts(result);
-        setWorkspaceError("");
-      })
-      .catch((error) => setWorkspaceError(error instanceof Error ? error.message : "Unable to load message contacts."));
-  }, []);
-
-  useEffect(() => {
-    if (!selectedThreadId) {
-      setMessages([]);
-      return;
-    }
-    setLoadingMessages(true);
-    messagesApi
-      .listMessages(selectedThreadId)
-      .then((result) => {
-        setMessages(result);
-        setThreads((current) => current.map((thread) => (
-          thread.id === selectedThreadId
-            ? { ...thread, unread: false, unreadCount: 0 }
-            : thread
-        )));
-        setWorkspaceError("");
-      })
-      .catch((error) => setWorkspaceError(error instanceof Error ? error.message : "Unable to load thread messages."))
-      .finally(() => setLoadingMessages(false));
-  }, [selectedThreadId]);
-
-  function toggleMultiSelect(setter: React.Dispatch<React.SetStateAction<string[]>>, value: string) {
-    setter((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
-  }
-
-  async function handleCreateThread() {
-    if (!newThreadParticipantIds.length || !newThreadOpeningText.trim()) {
-      setWorkspaceError("Pick at least one participant and add an opening message.");
-      return;
-    }
-    setCreatingThread(true);
-    try {
-      const created = await messagesApi.createThread({
-        title: newThreadTitle.trim() || undefined,
-        participantIds: newThreadParticipantIds,
-        documentIds: newThreadDocumentIds,
-        openingText: newThreadOpeningText.trim(),
-      });
-      setNewThreadTitle("");
-      setNewThreadOpeningText("");
-      setNewThreadParticipantIds([]);
-      setNewThreadDocumentIds([]);
-      setShowNewChat(false);
-      await loadThreads(created.id);
-      navigate(`/messages?threadId=${created.id}`, { replace: true });
-    } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : "Unable to create this conversation.");
-    } finally {
-      setCreatingThread(false);
-    }
-  }
-
-  async function handlePostMessage() {
-    if (!selectedThreadId || !composerText.trim()) return;
-    setPostingMessage(true);
-    try {
-      const created = await messagesApi.postMessage(selectedThreadId, {
-        text: composerText.trim(),
-        documentIds: selectedComposerDocumentIds,
-      });
-      setMessages((current) => [...current, created]);
-      setComposerText("");
-      setSelectedComposerDocumentIds([]);
-      await loadThreads(selectedThreadId);
-    } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : "Unable to send this message.");
-    } finally {
-      setPostingMessage(false);
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Messages" }]} />
-      <section className="rounded-[34px] border border-white/60 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98),_rgba(37,99,235,0.95))] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-3xl">
-            <div className="text-xs uppercase tracking-[0.28em] text-white/55">Portal messaging workspace</div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Messaging built around your teams and documents</h1>
-            <p className="mt-3 text-sm leading-6 text-white/72">
-              Use a familiar chat flow for direct messages, leadership groups, and document-linked discussions without leaving the portal.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 text-sm text-white/80">
-              {threads.length} active thread{threads.length === 1 ? "" : "s"}
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowNewChat((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-slate-100"
-            >
-              <Plus className="h-4 w-4" />
-              {showNewChat ? "Close composer" : "New conversation"}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {workspaceError ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {workspaceError}
-        </div>
-      ) : null}
-
-      <section className="grid min-h-[72vh] gap-0 overflow-hidden rounded-[34px] border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.08)] xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside className="border-b border-slate-200 bg-[linear-gradient(180deg,_#f8fbff,_#ffffff)] xl:border-b-0 xl:border-r">
-          <div className="border-b border-slate-200 px-5 py-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-950">Recent chats</div>
-                <div className="mt-1 text-sm text-slate-500">Direct messages, groups, and document-linked threads.</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowNewChat((current) => !current)}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 transition hover:border-[#0A6ED1] hover:text-[#0A6ED1]"
-                aria-label="Create conversation"
-              >
-                <Plus className="h-5 w-5" />
-              </button>
-            </div>
-            <label className="mt-4 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-              <Search className="h-4 w-4 text-slate-400" />
-              <input
-                value={threadSearch}
-                onChange={(event) => setThreadSearch(event.target.value)}
-                placeholder="Search chats, people, or previews"
-                className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
-              />
-            </label>
-          </div>
-
-          {showNewChat ? (
-            <div className="border-b border-slate-200 px-5 py-5">
-              <div className="rounded-[28px] border border-[#cfe2ff] bg-[#f6faff] p-4">
-                <div className="text-sm font-semibold text-slate-900">Start a new conversation</div>
-                <div className="mt-1 text-sm text-slate-500">Choose people, attach reference documents, and send the opening message.</div>
-                <div className="mt-4 space-y-4">
-                  <label className="space-y-2 text-sm">
-                    <span className="font-medium text-slate-700">Thread title</span>
-                    <input
-                      value={newThreadTitle}
-                      onChange={(event) => setNewThreadTitle(event.target.value)}
-                      placeholder="Optional for direct chats, useful for groups"
-                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-[#0A6ED1]"
-                    />
-                  </label>
-                  <div className="space-y-2 text-sm">
-                    <span className="font-medium text-slate-700">Recipients</span>
-                    <div className="flex max-h-32 flex-wrap gap-2 overflow-auto rounded-2xl border border-slate-200 bg-white p-3">
-                      {availableRecipients.map((recipient) => (
-                        <button
-                          key={recipient.id}
-                          type="button"
-                          onClick={() => toggleMultiSelect(setNewThreadParticipantIds, recipient.id)}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                            newThreadParticipantIds.includes(recipient.id)
-                              ? "border-[#0A6ED1] bg-[#EBF4FD] text-[#0A6ED1]"
-                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {recipient.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <span className="font-medium text-slate-700">Reference documents</span>
-                    <div className="flex max-h-28 flex-wrap gap-2 overflow-auto rounded-2xl border border-slate-200 bg-white p-3">
-                      {selectableDocuments.map((document) => (
-                        <button
-                          key={`new-thread-doc-${document.id}`}
-                          type="button"
-                          onClick={() => toggleMultiSelect(setNewThreadDocumentIds, document.id)}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                            newThreadDocumentIds.includes(document.id)
-                              ? "border-slate-950 bg-slate-950 text-white"
-                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {document.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <label className="space-y-2 text-sm">
-                    <span className="font-medium text-slate-700">Opening message</span>
-                    <textarea
-                      value={newThreadOpeningText}
-                      onChange={(event) => setNewThreadOpeningText(event.target.value)}
-                      rows={4}
-                      placeholder="Write the first message..."
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-[#0A6ED1]"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={creatingThread}
-                    onClick={() => void handleCreateThread()}
-                    className="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {creatingThread ? "Creating..." : "Create conversation"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="max-h-[calc(72vh-5rem)] overflow-auto p-3">
-            {loadingThreads ? <div className="px-3 py-4 text-sm text-slate-500">Loading conversations...</div> : null}
-            {!loadingThreads && filteredThreads.map((thread) => {
-              const counterpart = thread.participants.find((participant) => participant.id !== user.id) || thread.participants[0];
-              return (
-                <button
-                  key={thread.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedThreadId(thread.id);
-                    navigate(`/messages?threadId=${thread.id}`, { replace: true });
-                  }}
-                  className={`mb-2 w-full rounded-[24px] border px-4 py-3 text-left transition ${
-                    selectedThreadId === thread.id
-                      ? "border-[#0A6ED1] bg-[#EBF4FD] shadow-[0_12px_30px_rgba(10,110,209,0.12)]"
-                      : "border-transparent bg-white hover:border-slate-200 hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-sm font-semibold text-slate-700">
-                      {(counterpart?.name || "T").slice(0, 1)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="truncate text-sm font-semibold text-slate-900">{getThreadName(thread)}</div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {thread.unreadCount > 0 ? (
-                            <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-[#0A6ED1] px-2 py-0.5 text-[11px] font-semibold text-white">
-                              {thread.unreadCount > 99 ? "99+" : thread.unreadCount}
-                            </span>
-                          ) : null}
-                          <div className="text-[11px] text-slate-400">{formatDateTime(thread.lastMessageAt)}</div>
-                        </div>
-                      </div>
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{thread.kind}</span>
-                        {thread.unread ? <span className="h-2 w-2 rounded-full bg-[#0A6ED1]" /> : null}
-                      </div>
-                      <div className="mt-2 line-clamp-2 text-sm text-slate-500">{thread.lastMessagePreview || "No messages yet."}</div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-            {!loadingThreads && !filteredThreads.length ? (
-              <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                {threads.length ? "No chats match that search." : "No conversations yet. Use the plus button to start one."}
-              </div>
-            ) : null}
-          </div>
-        </aside>
-
-        <div className="flex min-h-[72vh] flex-col bg-[linear-gradient(180deg,_#f8fbff_0%,_#ffffff_28%)]">
-          {selectedThread ? (
-            <>
-              <div className="border-b border-slate-200 px-5 py-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-2xl font-semibold text-slate-950">{getThreadName(selectedThread)}</div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      {selectedThread.participants.map((participant) => `${participant.name} · ${participant.role}`).join("   |   ")}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                      {selectedThread.kind}
-                    </div>
-                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
-                      {messages.length} message{messages.length === 1 ? "" : "s"}
-                    </div>
-                  </div>
-                </div>
-                {selectedThread.linkedDocuments.length ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {selectedThread.linkedDocuments.map((document) => (
-                      <button
-                        key={`thread-doc-${document.id}`}
-                        type="button"
-                        onClick={() => navigate(`/documents/${document.id}`)}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100"
-                      >
-                        {document.name}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex-1 overflow-auto px-5 py-5">
-                {loadingMessages ? <div className="text-sm text-slate-500">Loading messages...</div> : null}
-                {!loadingMessages && messages.length ? (
-                  <div className="space-y-4">
-                    {messages.map((message) => {
-                      const own = message.authorId === user.id;
-                      return (
-                        <div key={message.id} className={`flex ${own ? "justify-end" : "justify-start"}`}>
-                          <div className={`max-w-[80%] rounded-[28px] px-4 py-3 shadow-sm ${own ? "bg-[#0A6ED1] text-white" : "border border-slate-200 bg-white text-slate-900"}`}>
-                            <div className={`flex items-center justify-between gap-4 text-xs ${own ? "text-white/72" : "text-slate-400"}`}>
-                              <span className={`font-semibold uppercase tracking-[0.18em] ${own ? "text-white/72" : "text-slate-400"}`}>
-                                {own ? "You" : `${message.authorName} · ${message.authorRole}`}
-                              </span>
-                              <span>{formatDateTime(message.createdAt)}</span>
-                            </div>
-                            <div className={`mt-2 whitespace-pre-wrap text-sm leading-6 ${own ? "text-white" : "text-slate-700"}`}>{message.text}</div>
-                            {message.linkedDocuments.length ? (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {message.linkedDocuments.map((document) => (
-                                  <button
-                                    key={`${message.id}-${document.id}`}
-                                    type="button"
-                                    onClick={() => navigate(`/documents/${document.id}`)}
-                                    className={`rounded-full border px-3 py-1 text-xs transition ${own ? "border-white/25 bg-white/12 text-white hover:bg-white/20" : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"}`}
-                                  >
-                                    {document.name}
-                                  </button>
-                                ))}
-                              </div>
-                            ) : null}
-                            {own ? (
-                              <div className={`mt-3 text-right text-[11px] ${own ? "text-white/78" : "text-slate-400"}`}>
-                                {getReceiptLabel(message)}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {!loadingMessages && !messages.length ? (
-                  <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
-                    No messages in this thread yet.
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="border-t border-slate-200 bg-white px-5 py-4">
-                {selectedComposerDocumentIds.length ? (
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {selectedComposerDocumentIds.map((documentId) => {
-                      const document = selectableDocuments.find((entry) => entry.id === documentId);
-                      if (!document) return null;
-                      return (
-                        <button
-                          key={`selected-composer-doc-${document.id}`}
-                          type="button"
-                          onClick={() => toggleMultiSelect(setSelectedComposerDocumentIds, document.id)}
-                          className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-700 transition hover:bg-slate-200"
-                        >
-                          {document.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-3">
-                  <textarea
-                    value={composerText}
-                    onChange={(event) => setComposerText(event.target.value)}
-                    rows={3}
-                    placeholder="Write a message..."
-                    className="w-full resize-none bg-transparent px-2 py-2 text-sm text-slate-700 outline-none placeholder:text-slate-400"
-                  />
-                  <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Attach documents</div>
-                      <div className="flex max-h-24 flex-wrap gap-2 overflow-auto">
-                        {selectableDocuments.map((document) => (
-                          <button
-                            key={`composer-doc-${document.id}`}
-                            type="button"
-                            onClick={() => toggleMultiSelect(setSelectedComposerDocumentIds, document.id)}
-                            className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                              selectedComposerDocumentIds.includes(document.id)
-                                ? "border-slate-950 bg-slate-950 text-white"
-                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                            }`}
-                          >
-                            {document.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={postingMessage || !composerText.trim()}
-                      onClick={() => void handlePostMessage()}
-                      className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {postingMessage ? "Sending..." : "Send message"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex h-full flex-1 items-center justify-center px-6 py-16">
-              <div className="max-w-md rounded-[30px] border border-dashed border-slate-200 bg-white p-8 text-center">
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-[#EBF4FD] text-[#0A6ED1]">
-                  <MessageSquare className="h-8 w-8" />
-                </div>
-                <div className="mt-5 text-2xl font-semibold text-slate-950">Pick a conversation</div>
-                <div className="mt-2 text-sm leading-6 text-slate-500">
-                  Open a recent thread from the left, or start a new one with the composer to begin a document-linked discussion.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowNewChat(true)}
-                  className="mt-6 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Start new conversation
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
     </div>
   );
 }
@@ -5012,7 +4502,6 @@ function AppContent() {
           { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><ProjectDocumentsPage /></RoleGate> },
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentDetailPage /></RoleGate> },
-          { path: "messages", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><MessagingPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "oversight/:userId", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },

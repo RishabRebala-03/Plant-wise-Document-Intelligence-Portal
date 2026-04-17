@@ -530,6 +530,11 @@ export const notificationsApi = {
       method: "POST",
     });
   },
+  markAllRead() {
+    return apiFetch<{ ok: boolean; readAt: string }>("/notifications/read-all", {
+      method: "POST",
+    });
+  },
 };
 
 export const messagesApi = {

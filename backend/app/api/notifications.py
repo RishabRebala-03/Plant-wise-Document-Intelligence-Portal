@@ -11,6 +11,29 @@ from ..utils import ensure_utc, error_response, success_response, utc_now
 notifications_bp = Blueprint("notifications", __name__)
 
 
+def _apply_generated_notification_reads(user: dict, notifications: list[dict]) -> list[dict]:
+    db = get_db()
+    if not notifications:
+        return notifications
+    reads = list(
+        db.notification_reads.find(
+            {"user_id": user["id"], "notification_id": {"$in": [notification["id"] for notification in notifications]}}
+        )
+    )
+    read_by_id = {entry["notification_id"]: entry for entry in reads}
+    enriched = []
+    for notification in notifications:
+        read_entry = read_by_id.get(notification["id"])
+        enriched.append(
+            {
+                **notification,
+                "read": bool(read_entry),
+                "read_at": read_entry.get("read_at") if read_entry else notification.get("read_at"),
+            }
+        )
+    return enriched
+
+
 def _build_exec_notifications(user: dict) -> list[dict]:
     db = get_db()
     preferences = user.get("notification_preferences", {})
@@ -105,7 +128,7 @@ def _build_exec_notifications(user: dict) -> list[dict]:
             )
 
     notifications.sort(key=lambda item: ensure_utc(item.get("created_at")) or utc_now(), reverse=True)
-    return notifications[:20]
+    return _apply_generated_notification_reads(user, notifications[:20])
 
 
 @notifications_bp.get("/notifications")
@@ -127,7 +150,7 @@ def list_notifications():
         return success_response(
             {
                 "items": [serialize_notification(notification) for notification in notifications],
-                "unreadCount": len(notifications),
+                "unreadCount": sum(1 for notification in notifications if not notification.get("read")),
             }
         )
 
@@ -159,12 +182,49 @@ def mark_notification_read(notification_id: str):
     user = current_user()
     db = get_db()
     notification = db.notifications.find_one({"id": notification_id, "user_id": user["id"]})
-    if not notification:
+    if notification:
+        if not notification.get("read"):
+            db.notifications.update_one(
+                {"id": notification_id, "user_id": user["id"]},
+                {"$set": {"read": True, "read_at": utc_now()}},
+            )
+        updated = db.notifications.find_one({"id": notification_id, "user_id": user["id"]})
+        return success_response(serialize_notification(updated))
+
+    now = utc_now()
+    db.notification_reads.update_one(
+        {"user_id": user["id"], "notification_id": notification_id},
+        {"$set": {"read_at": now}},
+        upsert=True,
+    )
+    generated = next((item for item in _build_exec_notifications(user) if item["id"] == notification_id), None)
+    if not generated:
         return error_response("Notification not found", 404)
-    if not notification.get("read"):
-        db.notifications.update_one(
-            {"id": notification_id, "user_id": user["id"]},
-            {"$set": {"read": True, "read_at": utc_now()}},
-        )
-    updated = db.notifications.find_one({"id": notification_id, "user_id": user["id"]})
-    return success_response(serialize_notification(updated))
+    generated["read"] = True
+    generated["read_at"] = now
+    return success_response(serialize_notification(generated))
+
+
+@notifications_bp.post("/notifications/read-all")
+@require_auth()
+def mark_all_notifications_read():
+    user = current_user()
+    db = get_db()
+    now = utc_now()
+    db.notifications.update_many(
+        {"user_id": user["id"], "read": False},
+        {"$set": {"read": True, "read_at": now}},
+    )
+    generated_notifications = _build_exec_notifications(user) if user["role"] in {"CEO", "Admin"} else []
+    if generated_notifications:
+        operations = []
+        for notification in generated_notifications:
+            operations.append(
+                {
+                    "filter": {"user_id": user["id"], "notification_id": notification["id"]},
+                    "update": {"$set": {"read_at": now}},
+                }
+            )
+        for operation in operations:
+            db.notification_reads.update_one(operation["filter"], operation["update"], upsert=True)
+    return success_response({"ok": True, "readAt": now.isoformat()})

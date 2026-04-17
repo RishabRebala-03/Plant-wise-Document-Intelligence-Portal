@@ -52,6 +52,8 @@ def ensure_indexes():
     db.activities.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     db.notifications.create_index([("id", ASCENDING)], unique=True)
     db.notifications.create_index([("user_id", ASCENDING), ("read", ASCENDING), ("created_at", DESCENDING)])
+    db.notification_reads.create_index([("user_id", ASCENDING), ("notification_id", ASCENDING)], unique=True)
+    db.notification_reads.create_index([("user_id", ASCENDING), ("read_at", DESCENDING)])
     _recreate_partial_notification_index(
         db,
         "user_id_1_source_comment_id_1",
