@@ -145,10 +145,6 @@ def update_plant(plant_id: str):
     }
     if not all(isinstance(value, str) and value.strip() for value in required_fields.values()):
         return error_response("Plant, Plant Name, Plant Name 2, and Address are required", 400)
-    if "plant_name" in updates:
-        duplicate = db.plants.find_one({"$or": [{"plant_name": updates["plant_name"]}, {"name": updates["plant_name"]}], "id": {"$ne": plant_id}})
-        if duplicate:
-            return error_response("A plant with this name already exists", 409)
     updates["updated_at"] = utc_now()
     db.plants.update_one({"id": plant_id}, {"$set": updates})
     updated = db.plants.find_one({"id": plant_id})
