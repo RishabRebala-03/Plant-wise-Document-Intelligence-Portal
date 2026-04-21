@@ -98,8 +98,16 @@ def current_business_hours() -> dict[str, Any]:
 
 
 def get_client_ip() -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-    return forwarded or request.remote_addr or "unknown"
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        for candidate in forwarded.split(","):
+            value = candidate.strip()
+            if value and value.lower() != "unknown":
+                return value
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if real_ip and real_ip.lower() != "unknown":
+        return real_ip
+    return request.remote_addr or "unknown"
 
 
 def parse_client_fingerprint() -> dict[str, Any]:

@@ -71,7 +71,9 @@ def create_refresh_token(user: dict[str, Any], session_id: str) -> tuple[str, st
     return token, jti
 
 
-def _active_session_id(user: dict[str, Any]) -> str:
+def _active_session_id(user: dict[str, Any], *, replace_existing: bool = False) -> str:
+    if replace_existing:
+        return secrets.token_urlsafe(18)
     return user.get("active_session_id") or secrets.token_urlsafe(18)
 
 
@@ -92,7 +94,7 @@ def _revoke_user_refresh_tokens(user_id: str, *, keep_jti: str | None = None):
 
 def issue_tokens(user: dict[str, Any], *, replace_existing: bool = False) -> dict[str, str]:
     db = get_db()
-    session_id = _active_session_id(user)
+    session_id = _active_session_id(user, replace_existing=replace_existing)
     if replace_existing:
         db.users.update_one(
             {"id": user["id"]},
