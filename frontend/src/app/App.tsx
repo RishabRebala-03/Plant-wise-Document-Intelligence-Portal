@@ -2910,6 +2910,9 @@ function AdminMasterDataPage() {
         plantName: plantDraft.plantName.trim(),
         plantName2: plantDraft.plantName2.trim(),
         address: plantDraft.address.trim(),
+        name: plantDraft.plantName.trim(),
+        company: "Midwest Limited",
+        location: plantDraft.address.trim(),
       });
       setNotice(`${plantDraft.plantName.trim()} was added to master data.`);
       setPlantDraft({
@@ -2998,10 +3001,19 @@ function AdminMasterDataPage() {
 
   async function savePlantEdit() {
     if (!editingPlantId) return;
+    if (!plantEditDraft.plant.trim() || !plantEditDraft.plantName.trim() || !plantEditDraft.plantName2.trim() || !plantEditDraft.address.trim()) {
+      setError("Plant, Plant Name, Plant Name 2, and Address are required.");
+      return;
+    }
     setPlantSubmitting(true);
     resetMessages();
     try {
-      await plantsApi.update(editingPlantId, plantEditDraft);
+      await plantsApi.update(editingPlantId, {
+        ...plantEditDraft,
+        name: plantEditDraft.plantName.trim(),
+        company: "Midwest Limited",
+        location: plantEditDraft.address.trim(),
+      });
       setNotice("Plant details updated.");
       setEditingPlantId(null);
       await refreshData();

@@ -10,6 +10,7 @@ from ..utils import error_response, parse_json_body, success_response, utc_now
 
 
 plants_bp = Blueprint("plants", __name__)
+DEFAULT_PLANT_COMPANY = "Midwest Limited"
 
 
 def _allowed_plant_ids(user: dict) -> list[str] | None:
@@ -73,7 +74,7 @@ def create_plant():
     plant_name = (body.get("plantName") or body.get("name") or "").strip()
     plant_name_2 = (body.get("plantName2") or "").strip()
     address = (body.get("address") or body.get("location") or "").strip()
-    company = (body.get("company") or "").strip() or None
+    company = (body.get("company") or "").strip() or DEFAULT_PLANT_COMPANY
     capacity = (body.get("capacity") or "").strip() or None
     manager_name = (body.get("manager") or "").strip() or None
 
@@ -134,6 +135,8 @@ def update_plant(plant_id: str):
         updates["name"] = updates["plant_name"]
     if "address" in updates:
         updates["location"] = updates["address"]
+    if "company" in updates and not updates["company"]:
+        updates["company"] = DEFAULT_PLANT_COMPANY
     if not updates:
         return error_response("No changes were supplied", 400)
     required_fields = {
