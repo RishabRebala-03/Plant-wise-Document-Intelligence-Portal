@@ -80,8 +80,6 @@ def create_plant():
 
     if not plant_code or not plant_name or not plant_name_2 or not address:
         return error_response("Plant, Plant Name, Plant Name 2, and Address are required", 400)
-    if db.plants.find_one({"$or": [{"plant_name": plant_name}, {"name": plant_name}]}):
-        return error_response("A plant with this name already exists", 409)
 
     now = utc_now()
     plant = {
