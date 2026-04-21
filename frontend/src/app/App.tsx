@@ -2796,18 +2796,16 @@ function AdminMasterDataPage() {
     assignedPlantIds: [] as string[],
   });
   const [plantDraft, setPlantDraft] = useState({
-    name: "",
-    company: "Midwest Limited",
-    location: "",
-    capacity: "",
-    manager: "",
+    plant: "",
+    plantName: "",
+    plantName2: "",
+    address: "",
   });
   const [plantEditDraft, setPlantEditDraft] = useState({
-    name: "",
-    company: "",
-    location: "",
-    capacity: "",
-    manager: "",
+    plant: "",
+    plantName: "",
+    plantName2: "",
+    address: "",
   });
   const [projectDraft, setProjectDraft] = useState({
     plantId: "",
@@ -2900,27 +2898,25 @@ function AdminMasterDataPage() {
   }
 
   async function createPlantRecord() {
-    if (!plantDraft.name.trim() || !plantDraft.company.trim()) {
-      setError("Plant name and company are required.");
+    if (!plantDraft.plant.trim() || !plantDraft.plantName.trim() || !plantDraft.plantName2.trim() || !plantDraft.address.trim()) {
+      setError("Plant, Plant Name, Plant Name 2, and Address are required.");
       return;
     }
     setPlantSubmitting(true);
     resetMessages();
     try {
       await plantsApi.create({
-        name: plantDraft.name.trim(),
-        company: plantDraft.company.trim(),
-        location: plantDraft.location.trim(),
-        capacity: plantDraft.capacity.trim(),
-        manager: plantDraft.manager.trim(),
+        plant: plantDraft.plant.trim(),
+        plantName: plantDraft.plantName.trim(),
+        plantName2: plantDraft.plantName2.trim(),
+        address: plantDraft.address.trim(),
       });
-      setNotice(`${plantDraft.name.trim()} was added to master data.`);
+      setNotice(`${plantDraft.plantName.trim()} was added to master data.`);
       setPlantDraft({
-        name: "",
-        company: "Midwest Limited",
-        location: "",
-        capacity: "",
-        manager: "",
+        plant: "",
+        plantName: "",
+        plantName2: "",
+        address: "",
       });
       await refreshData();
     } catch (err) {
@@ -2992,11 +2988,10 @@ function AdminMasterDataPage() {
   function openPlantEditor(plant: Plant) {
     setEditingPlantId(plant.id);
     setPlantEditDraft({
-      name: plant.name,
-      company: plant.company,
-      location: plant.location || "",
-      capacity: plant.capacity || "",
-      manager: plant.manager || "",
+      plant: plant.plant || "",
+      plantName: plant.plantName || plant.name,
+      plantName2: plant.plantName2 || "",
+      address: plant.address || plant.location || "",
     });
     resetMessages();
   }
@@ -3148,11 +3143,10 @@ function AdminMasterDataPage() {
 
         <SectionCard title="Create plant" subtitle="Add new operational plants to the platform">
           <div className="grid gap-3">
-            <input value={plantDraft.name} onChange={(event) => setPlantDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Plant name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.company} onChange={(event) => setPlantDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.location} onChange={(event) => setPlantDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Location" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.capacity} onChange={(event) => setPlantDraft((current) => ({ ...current, capacity: event.target.value }))} placeholder="Capacity" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.manager} onChange={(event) => setPlantDraft((current) => ({ ...current, manager: event.target.value }))} placeholder="Primary manager name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.plant} onChange={(event) => setPlantDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.plantName} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.plantName2} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <input value={plantDraft.address} onChange={(event) => setPlantDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
             <button onClick={() => void createPlantRecord()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
               Create plant
             </button>
@@ -3305,8 +3299,8 @@ function AdminMasterDataPage() {
               <div key={plant.id} className="rounded-[24px] border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-base font-semibold text-slate-900">{plant.name}</div>
-                    <div className="mt-1 text-sm text-slate-500">{plant.company}{plant.location ? ` • ${plant.location}` : ""}</div>
+                    <div className="text-base font-semibold text-slate-900">{plant.plantName || plant.name}</div>
+                    <div className="mt-1 text-sm text-slate-500">{[plant.plant, plant.plantName2, plant.address].filter(Boolean).join(" • ")}</div>
                     <div className="mt-1 text-xs text-slate-400">{plant.documents} document{plant.documents === 1 ? "" : "s"} linked</div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -3325,11 +3319,10 @@ function AdminMasterDataPage() {
               <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
                 <div className="text-base font-semibold text-slate-900">Edit plant</div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <input value={plantEditDraft.name} onChange={(event) => setPlantEditDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Plant name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.company} onChange={(event) => setPlantEditDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.location} onChange={(event) => setPlantEditDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Location" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.capacity} onChange={(event) => setPlantEditDraft((current) => ({ ...current, capacity: event.target.value }))} placeholder="Capacity" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.manager} onChange={(event) => setPlantEditDraft((current) => ({ ...current, manager: event.target.value }))} placeholder="Manager" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 md:col-span-2" />
+                  <input value={plantEditDraft.plant} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.plantName} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.plantName2} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                  <input value={plantEditDraft.address} onChange={(event) => setPlantEditDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
                 </div>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <button onClick={() => void savePlantEdit()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">

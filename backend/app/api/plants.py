@@ -29,7 +29,9 @@ def list_plants():
     allowed_ids = _allowed_plant_ids(user)
     query = {"id": {"$in": allowed_ids}} if allowed_ids is not None else {}
     plants = []
-    for plant in db.plants.find(query).sort("name", 1):
+    plant_records = list(db.plants.find(query))
+    plant_records.sort(key=lambda plant: (plant.get("plant_name") or plant.get("name") or plant.get("plant") or "").lower())
+    for plant in plant_records:
         recent_docs = list(db.documents.find({"plant_id": plant["id"], "deleted_at": None}).sort("uploaded_at", -1).limit(4))
         plants.append(serialize_plant(plant, [serialize_document(doc, []) for doc in recent_docs]))
 
@@ -67,33 +69,39 @@ def get_plant(plant_id: str):
 def create_plant():
     db = get_db()
     body = parse_json_body()
-    name = (body.get("name") or "").strip()
-    company = (body.get("company") or "").strip()
-    location = (body.get("location") or "").strip()
-    capacity = (body.get("capacity") or "").strip()
+    plant_code = (body.get("plant") or "").strip()
+    plant_name = (body.get("plantName") or body.get("name") or "").strip()
+    plant_name_2 = (body.get("plantName2") or "").strip()
+    address = (body.get("address") or body.get("location") or "").strip()
+    company = (body.get("company") or "").strip() or None
+    capacity = (body.get("capacity") or "").strip() or None
     manager_name = (body.get("manager") or "").strip() or None
 
-    if not name or not company:
-        return error_response("Plant name and company are required", 400)
-    if db.plants.find_one({"name": name}):
+    if not plant_code or not plant_name or not plant_name_2 or not address:
+        return error_response("Plant, Plant Name, Plant Name 2, and Address are required", 400)
+    if db.plants.find_one({"$or": [{"plant_name": plant_name}, {"name": plant_name}]}):
         return error_response("A plant with this name already exists", 409)
 
     now = utc_now()
     plant = {
         "id": next_public_id("plants", "P"),
-        "name": name,
+        "plant": plant_code,
+        "plant_name": plant_name,
+        "plant_name_2": plant_name_2,
+        "address": address,
+        "name": plant_name,
         "company": company,
         "documents_count": 0,
         "last_upload_at": None,
         "status": "Operational",
-        "capacity": capacity or None,
-        "location": location or None,
+        "capacity": capacity,
+        "location": address,
         "manager_name": manager_name,
         "created_at": now,
         "updated_at": now,
     }
     db.plants.insert_one(plant)
-    record_audit_event("Plant Created", user=current_user(), resource_type="plant", resource_id=plant["id"], metadata={"plantName": name})
+    record_audit_event("Plant Created", user=current_user(), resource_type="plant", resource_id=plant["id"], metadata={"plant": plant_code, "plantName": plant_name})
     return success_response(serialize_plant(plant), 201)
 
 
@@ -108,20 +116,43 @@ def update_plant(plant_id: str):
         return error_response("Plant not found", 404)
 
     updates = {}
-    for source, target in (("name", "name"), ("company", "company"), ("location", "location"), ("capacity", "capacity"), ("manager", "manager_name")):
+    field_map = {
+        "plant": "plant",
+        "plantName": "plant_name",
+        "plantName2": "plant_name_2",
+        "address": "address",
+        "name": "name",
+        "company": "company",
+        "location": "location",
+        "capacity": "capacity",
+        "manager": "manager_name",
+    }
+    for source, target in field_map.items():
         if body.get(source) is not None:
             updates[target] = body[source].strip() if isinstance(body[source], str) else body[source]
+    if "plant_name" in updates:
+        updates["name"] = updates["plant_name"]
+    if "address" in updates:
+        updates["location"] = updates["address"]
     if not updates:
         return error_response("No changes were supplied", 400)
-    if "name" in updates:
-        duplicate = db.plants.find_one({"name": updates["name"], "id": {"$ne": plant_id}})
+    required_fields = {
+        "plant": updates.get("plant", plant.get("plant")),
+        "plant_name": updates.get("plant_name", plant.get("plant_name") or plant.get("name")),
+        "plant_name_2": updates.get("plant_name_2", plant.get("plant_name_2")),
+        "address": updates.get("address", plant.get("address") or plant.get("location")),
+    }
+    if not all(isinstance(value, str) and value.strip() for value in required_fields.values()):
+        return error_response("Plant, Plant Name, Plant Name 2, and Address are required", 400)
+    if "plant_name" in updates:
+        duplicate = db.plants.find_one({"$or": [{"plant_name": updates["plant_name"]}, {"name": updates["plant_name"]}], "id": {"$ne": plant_id}})
         if duplicate:
             return error_response("A plant with this name already exists", 409)
     updates["updated_at"] = utc_now()
     db.plants.update_one({"id": plant_id}, {"$set": updates})
     updated = db.plants.find_one({"id": plant_id})
-    if "name" in updates:
-        db.documents.update_many({"plant_id": plant_id}, {"$set": {"plant_name": updates["name"], "updated_at": updates["updated_at"]}})
+    if "plant_name" in updates:
+        db.documents.update_many({"plant_id": plant_id}, {"$set": {"plant_name": updates["plant_name"], "updated_at": updates["updated_at"]}})
         db.users.update_many({"assigned_plant_ids": plant_id}, {"$set": {"updated_at": updates["updated_at"]}})
     record_audit_event("Plant Updated", user=current_user(), resource_type="plant", resource_id=plant_id, metadata={"updatedFields": sorted(updates.keys())})
     return success_response(serialize_plant(updated))

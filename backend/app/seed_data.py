@@ -22,6 +22,10 @@ except ImportError:
 PLANTS = [
     {
         "id": "P001",
+        "plant": "PLANT-ALPHA",
+        "plant_name": "Plant Alpha - Bloomington",
+        "plant_name_2": "Alpha Bloomington",
+        "address": "Bloomington, IL",
         "name": "Plant Alpha - Bloomington",
         "company": "Midwest Ltd",
         "documents_count": 142,
@@ -33,6 +37,10 @@ PLANTS = [
     },
     {
         "id": "P002",
+        "plant": "PLANT-BETA",
+        "plant_name": "Plant Beta - Springfield",
+        "plant_name_2": "Beta Springfield",
+        "address": "Springfield, IL",
         "name": "Plant Beta - Springfield",
         "company": "Midwest Ltd",
         "documents_count": 98,
@@ -44,6 +52,10 @@ PLANTS = [
     },
     {
         "id": "P003",
+        "plant": "PLANT-GAMMA",
+        "plant_name": "Plant Gamma - Decatur",
+        "plant_name_2": "Gamma Decatur",
+        "address": "Decatur, IL",
         "name": "Plant Gamma - Decatur",
         "company": "Midwest Ltd",
         "documents_count": 67,
@@ -55,6 +67,10 @@ PLANTS = [
     },
     {
         "id": "P004",
+        "plant": "PLANT-DELTA",
+        "plant_name": "Plant Delta - Peoria",
+        "plant_name_2": "Delta Peoria",
+        "address": "Peoria, IL",
         "name": "Plant Delta - Peoria",
         "company": "Midwest Ltd",
         "documents_count": 53,
@@ -66,6 +82,10 @@ PLANTS = [
     },
     {
         "id": "P005",
+        "plant": "PLANT-EPSILON",
+        "plant_name": "Plant Epsilon - Rockford",
+        "plant_name_2": "Epsilon Rockford",
+        "address": "Rockford, IL",
         "name": "Plant Epsilon - Rockford",
         "company": "Midwest Ltd",
         "documents_count": 31,

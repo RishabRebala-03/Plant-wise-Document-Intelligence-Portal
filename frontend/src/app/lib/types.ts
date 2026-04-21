@@ -191,6 +191,10 @@ export interface GovernancePolicy {
 export interface Plant {
   id: string;
   name: string;
+  plant?: string | null;
+  plantName?: string | null;
+  plantName2?: string | null;
+  address?: string | null;
   company: string;
   documents: number;
   lastUpload: string | null;

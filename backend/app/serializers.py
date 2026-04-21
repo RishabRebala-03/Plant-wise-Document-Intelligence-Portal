@@ -166,15 +166,21 @@ def serialize_message_entry(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_plant(plant: dict[str, Any], recent_documents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    plant_name = plant.get("plant_name") or plant.get("name") or plant.get("plant")
+    address = plant.get("address") or plant.get("location")
     return {
         "id": plant["id"],
-        "name": plant["name"],
-        "company": plant["company"],
+        "name": plant_name,
+        "plant": plant.get("plant"),
+        "plantName": plant_name,
+        "plantName2": plant.get("plant_name_2"),
+        "address": address,
+        "company": plant.get("company", ""),
         "documents": plant.get("documents_count", 0),
         "lastUpload": to_iso(plant.get("last_upload_at")),
         "status": plant.get("status", "Operational"),
         "manager": plant.get("manager_name"),
-        "location": plant.get("location"),
+        "location": address,
         "capacity": plant.get("capacity"),
         "recentDocuments": recent_documents or [],
     }
