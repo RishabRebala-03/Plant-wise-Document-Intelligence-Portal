@@ -169,8 +169,62 @@ def delete_plant(plant_id: str):
     plant = db.plants.find_one({"id": plant_id})
     if not plant:
         return error_response("Plant not found", 404)
-    if db.documents.count_documents({"plant_id": plant_id, "deleted_at": None}) > 0:
-        return error_response("Delete or move the plant's documents before removing it", 409)
+
+    now = utc_now()
+    active_documents = list(db.documents.find({"plant_id": plant_id, "deleted_at": None}, {"id": 1}))
+    assigned_users = list(
+        db.users.find(
+            {"assigned_plant_ids": plant_id},
+            {"id": 1, "assigned_plant_ids": 1, "assigned_plant_names": 1, "plant_id": 1, "plant_name": 1},
+        )
+    )
+    deleted_projects = 0
+
+    if active_documents:
+        db.documents.update_many(
+            {"plant_id": plant_id, "deleted_at": None},
+            {"$set": {"deleted_at": now, "updated_at": now}},
+        )
+
+    for user in assigned_users:
+        next_assigned_ids = [value for value in user.get("assigned_plant_ids", []) if value != plant_id]
+        next_assigned_names = [value for value in user.get("assigned_plant_names", []) if value != (plant.get("plant_name") or plant.get("name"))]
+        primary_plant_id = next_assigned_ids[0] if next_assigned_ids else None
+        primary_plant_name = next_assigned_names[0] if next_assigned_names else None
+        db.users.update_one(
+            {"id": user["id"]},
+            {
+                "$set": {
+                    "assigned_plant_ids": next_assigned_ids,
+                    "assigned_plant_names": next_assigned_names,
+                    "plant_id": primary_plant_id,
+                    "plant_name": primary_plant_name,
+                    "updated_at": now,
+                }
+            },
+        )
+
+    if "projects" in db.list_collection_names():
+        deleted_projects = db.projects.delete_many({"plant_id": plant_id}).deleted_count
+
     db.plants.delete_one({"id": plant_id})
-    record_audit_event("Plant Deleted", user=current_user(), resource_type="plant", resource_id=plant_id, metadata={"plantName": plant.get("name")})
-    return success_response({"message": "Plant removed"})
+    record_audit_event(
+        "Plant Deleted",
+        user=current_user(),
+        resource_type="plant",
+        resource_id=plant_id,
+        metadata={
+            "plantName": plant.get("plant_name") or plant.get("name"),
+            "deletedDocumentCount": len(active_documents),
+            "updatedUserCount": len(assigned_users),
+            "deletedProjectCount": deleted_projects,
+        },
+    )
+    return success_response(
+        {
+            "message": "Plant removed",
+            "deletedDocumentCount": len(active_documents),
+            "updatedUserCount": len(assigned_users),
+            "deletedProjectCount": deleted_projects,
+        }
+    )
