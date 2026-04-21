@@ -154,32 +154,12 @@ def _address_matches(rule_address: str, client_ip: str) -> bool:
         return rule_address.strip() == client_ip.strip()
 
 
-def _is_loopback_or_local_rule(rule_address: str) -> bool:
-    try:
-        normalized = rule_address.strip()
-        if not normalized:
-            return False
-        if "/" in normalized:
-            network = ipaddress.ip_network(normalized, strict=False)
-            return network.is_loopback
-        address = ipaddress.ip_address(normalized)
-        return address.is_loopback
-    except ValueError:
-        return False
-
-
 def evaluate_ip_rules(client_ip: str) -> tuple[bool, str | None]:
     db = get_db()
-    allowed_rules = list(db.ip_rules.find({"status": "Allowed"}))
     blocked_rules = list(db.ip_rules.find({"status": "Blocked"}))
 
     if any(_address_matches(rule.get("address", ""), client_ip) for rule in blocked_rules):
         return False, "blocked"
-
-    # Do not turn on strict allowlisting from the seeded localhost-only rules.
-    enforce_allowlist = any(not _is_loopback_or_local_rule(str(rule.get("address", ""))) for rule in allowed_rules)
-    if enforce_allowlist and not any(_address_matches(rule.get("address", ""), client_ip) for rule in allowed_rules):
-        return False, "not_whitelisted"
     return True, None
 
 
