@@ -115,10 +115,18 @@ export interface DocumentRecord {
   name: string;
   plant: string;
   plantId: string;
+  projectId?: string | null;
+  projectName?: string | null;
   category: string;
   uploadedBy: string;
   uploadedById: string;
   date: string | null;
+  uploadedAt?: string | null;
+  owner?: {
+    id?: string | null;
+    name?: string | null;
+    role?: UserRole | string | null;
+  };
   version: number;
   uploadComment?: string | null;
   status: string;

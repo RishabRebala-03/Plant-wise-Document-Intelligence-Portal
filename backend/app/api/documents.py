@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import datetime, time, timezone
 from pathlib import Path
 from flask import Blueprint, Response, current_app, request, send_file
 from werkzeug.utils import secure_filename
@@ -242,9 +243,23 @@ def _document_query_for_user(user: dict) -> dict:
         assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
         if assigned:
             base["plant_id"] = {"$in": assigned}
-    if user["role"] == "Mining Manager" and request.args.get("scope") == "mine":
         base["uploaded_by_id"] = user["id"]
     return base
+
+
+def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed_date = datetime.combine(datetime.strptime(value, "%Y-%m-%d").date(), time.max if end_of_day else time.min)
+        except ValueError:
+            return None
+    if parsed_date.tzinfo is None:
+        parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+    return parsed_date.astimezone(timezone.utc)
 
 
 def _visible_comments(document_id: str, user: dict) -> list[dict]:
@@ -274,7 +289,7 @@ def _can_view_document(user: dict, document: dict) -> bool:
     if user["role"] in {"CEO", "Admin"}:
         return True
     assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
-    return document.get("plant_id") in assigned
+    return document.get("plant_id") in assigned and document.get("uploaded_by_id") == user["id"]
 
 
 def _validate_uploaded_file(file) -> tuple[str, str] | None:
@@ -326,10 +341,15 @@ def list_documents():
     page, page_size = get_pagination()
     query = _document_query_for_user(user)
     q = request.args.get("q", "").strip()
-    plant_id = request.args.get("plant_id", "").strip()
+    plant_id = request.args.get("plant_id", request.args.get("plantId", "")).strip()
     category = request.args.get("category", "").strip()
     status = request.args.get("status", "").strip()
-    uploaded_by_id = request.args.get("uploaded_by_id", "").strip()
+    project_id = request.args.get("project_id", request.args.get("projectId", "")).strip()
+    doc_type = request.args.get("type", request.args.get("document_type", "")).strip()
+    active = request.args.get("active")
+    date_from = _parse_date_boundary(request.args.get("date_from") or request.args.get("dateFrom"))
+    date_to = _parse_date_boundary(request.args.get("date_to") or request.args.get("dateTo"), end_of_day=True)
+    uploaded_by_id = request.args.get("uploaded_by_id", request.args.get("uploadedById", "")).strip()
     include_deleted = parse_bool(request.args.get("include_deleted"), False)
 
     if include_deleted and user["role"] == "Admin":
@@ -338,15 +358,40 @@ def list_documents():
         query["$or"] = [
             {"name": {"$regex": q, "$options": "i"}},
             {"uploaded_by_name": {"$regex": q, "$options": "i"}},
+            {"plant_name": {"$regex": q, "$options": "i"}},
+            {"project_name": {"$regex": q, "$options": "i"}},
+            {"category": {"$regex": q, "$options": "i"}},
         ]
     if plant_id:
-        query["plant_id"] = plant_id
+        if user["role"] == "Mining Manager":
+            assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
+            if plant_id not in assigned:
+                query["plant_id"] = {"$in": []}
+            else:
+                query["plant_id"] = plant_id
+        else:
+            query["plant_id"] = plant_id
+    if project_id:
+        query["project_id"] = project_id
     if category:
         query["category"] = category
+    if doc_type:
+        query["category"] = doc_type
     if status:
         query["status"] = status
+    if active is not None:
+        if parse_bool(active, True):
+            query["deleted_at"] = None
+        elif user["role"] == "Admin":
+            query["deleted_at"] = {"$ne": None}
     if uploaded_by_id:
         query["uploaded_by_id"] = uploaded_by_id
+    if date_from or date_to:
+        query["uploaded_at"] = {}
+        if date_from:
+            query["uploaded_at"]["$gte"] = date_from
+        if date_to:
+            query["uploaded_at"]["$lte"] = date_to
 
     sort_by = request.args.get("sort_by", "uploaded_at")
     direction = -1 if request.args.get("order", "desc") == "desc" else 1
@@ -355,7 +400,11 @@ def list_documents():
         "uploaded_at": "uploaded_at",
         "name": "name",
         "plant": "plant_name",
+        "project": "project_name",
+        "project_name": "project_name",
+        "category": "category",
         "status": "status",
+        "uploaded_by": "uploaded_by_name",
     }.get(sort_by, "uploaded_at")
 
     total = db.documents.count_documents(query)
@@ -380,6 +429,15 @@ def list_documents():
             },
         }
     )
+
+
+@documents_bp.get("/documents/search")
+@require_auth()
+def search_documents():
+    query_text = request.args.get("q", "").strip()
+    if not query_text:
+        return success_response({"items": []})
+    return list_documents()
 
 
 @documents_bp.get("/documents/export.csv")
@@ -425,6 +483,7 @@ def create_document():
     plant_name = form.get("plant") or form.get("plantName")
     name = (form.get("name") or "").strip()
     category = (form.get("category") or "").strip()
+    project_id = (form.get("projectId") or form.get("project_id") or "").strip()
     upload_comment = (form.get("uploadComment") or form.get("comments") or "").strip()
     company = (form.get("company") or "Midwest Ltd").strip()
     status = (form.get("status") or "In Review").strip()
@@ -482,6 +541,12 @@ def create_document():
             documentName=name,
         )
         return error_response("Managers can only upload documents for their assigned plant", 403)
+
+    project = None
+    if project_id:
+        project = db.projects.find_one({"id": project_id, "plant_id": plant["id"]})
+        if not project:
+            return error_response("Project not found for the selected plant", 404)
 
     file = request.files.get("file")
     file_storage_id = None
@@ -545,10 +610,13 @@ def create_document():
         "name": name,
         "plant_id": plant["id"],
         "plant_name": plant["name"],
+        "project_id": project["id"] if project else None,
+        "project_name": project["name"] if project else None,
         "category": category,
         "company": company,
         "uploaded_by_id": user["id"],
         "uploaded_by_name": user["name"],
+        "uploaded_by_role": user.get("role"),
         "uploaded_at": now,
         "version": 1,
         "upload_comment": upload_comment or None,
@@ -574,6 +642,14 @@ def create_document():
         uploadCommentPresent=bool(upload_comment),
     )
     db.documents.insert_one(document)
+    if project:
+        db.projects.update_one(
+            {"id": project["id"]},
+            {
+                "$addToSet": {"document_ids": document["id"]},
+                "$set": {"updated_at": now},
+            },
+        )
     db.plants.update_one(
         {"id": plant["id"]},
         {"$inc": {"documents_count": 1}, "$set": {"last_upload_at": now, "updated_at": now}},
@@ -664,6 +740,14 @@ def update_document(document_id: str):
         value = body.get(key)
         if value is not None:
             updates[field] = value.strip() if isinstance(value, str) else value
+
+    project_id = (body.get("projectId") or body.get("project_id") or "").strip()
+    if project_id:
+        project = db.projects.find_one({"id": project_id, "plant_id": document["plant_id"]})
+        if not project:
+            return error_response("Project not found for this document plant", 404)
+        updates["project_id"] = project["id"]
+        updates["project_name"] = project["name"]
 
     status = body.get("status")
     if status is not None:
@@ -757,6 +841,9 @@ def update_document(document_id: str):
     changed_fields = sorted(updates.keys())
     previous_status = document.get("status")
     db.documents.update_one({"id": document_id}, {"$set": updates})
+    if "project_id" in updates:
+        db.projects.update_many({"document_ids": document_id}, {"$pull": {"document_ids": document_id}, "$set": {"updated_at": updates["updated_at"]}})
+        db.projects.update_one({"id": updates["project_id"]}, {"$addToSet": {"document_ids": document_id}, "$set": {"updated_at": updates["updated_at"]}})
     updated = db.documents.find_one({"id": document_id})
     _record_activity(
         "Updated",
@@ -818,6 +905,7 @@ def delete_document(document_id: str):
 
     now = utc_now()
     db.documents.update_one({"id": document_id}, {"$set": {"deleted_at": now, "updated_at": now}})
+    db.projects.update_many({"document_ids": document_id}, {"$pull": {"document_ids": document_id}, "$set": {"updated_at": now}})
     db.plants.update_one({"id": document["plant_id"]}, {"$inc": {"documents_count": -1}, "$set": {"updated_at": now}})
     _record_activity("Deleted", document, user, {"deletedAt": now.isoformat()})
     _log_document_event(

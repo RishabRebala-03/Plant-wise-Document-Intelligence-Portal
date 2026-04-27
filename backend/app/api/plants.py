@@ -6,7 +6,7 @@ from ..auth import current_user, require_auth, require_capability
 from ..db import get_db, next_public_id
 from ..security import record_audit_event
 from ..serializers import serialize_document, serialize_plant
-from ..utils import error_response, parse_json_body, success_response, utc_now
+from ..utils import error_response, get_pagination, parse_bool, parse_json_body, success_response, utc_now
 
 
 plants_bp = Blueprint("plants", __name__)
@@ -27,13 +27,32 @@ def _allowed_plant_ids(user: dict) -> list[str] | None:
 def list_plants():
     db = get_db()
     user = current_user()
+    page, page_size = get_pagination()
     allowed_ids = _allowed_plant_ids(user)
     query = {"id": {"$in": allowed_ids}} if allowed_ids is not None else {}
+    q = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    active = request.args.get("active")
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"plant_name": {"$regex": q, "$options": "i"}},
+            {"plant": {"$regex": q, "$options": "i"}},
+            {"address": {"$regex": q, "$options": "i"}},
+        ]
+    if status:
+        query["status"] = status
+    if active is not None:
+        query["status"] = "Operational" if parse_bool(active, True) else {"$ne": "Operational"}
     plants = []
     plant_records = list(db.plants.find(query))
     plant_records.sort(key=lambda plant: (plant.get("plant_name") or plant.get("name") or plant.get("plant") or "").lower())
-    for plant in plant_records:
-        recent_docs = list(db.documents.find({"plant_id": plant["id"], "deleted_at": None}).sort("uploaded_at", -1).limit(4))
+    total = len(plant_records)
+    for plant in plant_records[(page - 1) * page_size : page * page_size]:
+        document_query = {"plant_id": plant["id"], "deleted_at": None}
+        if user.get("role") == "Mining Manager":
+            document_query["uploaded_by_id"] = user["id"]
+        recent_docs = list(db.documents.find(document_query).sort("uploaded_at", -1).limit(4))
         plants.append(serialize_plant(plant, [serialize_document(doc, []) for doc in recent_docs]))
 
     summary = {
@@ -41,7 +60,15 @@ def list_plants():
         "operational": len([plant for plant in plants if plant["status"] == "Operational"]),
         "needsAttention": len([plant for plant in plants if plant["status"] != "Operational"]),
     }
-    return success_response({"summary": summary, "items": plants})
+    return success_response({"summary": summary, "items": plants, "pagination": {"page": page, "pageSize": page_size, "total": total}})
+
+
+@plants_bp.get("/plants/search")
+@require_auth()
+def search_plants():
+    if not request.args.get("q", "").strip():
+        return success_response({"summary": {"totalPlants": 0, "operational": 0, "needsAttention": 0}, "items": []})
+    return list_plants()
 
 
 @plants_bp.get("/plants/<plant_id>")
@@ -55,7 +82,10 @@ def get_plant(plant_id: str):
     plant = db.plants.find_one({"id": plant_id})
     if not plant:
         return error_response("Plant not found", 404)
-    documents = list(db.documents.find({"plant_id": plant_id, "deleted_at": None}).sort("uploaded_at", -1))
+    document_query = {"plant_id": plant_id, "deleted_at": None}
+    if user.get("role") == "Mining Manager":
+        document_query["uploaded_by_id"] = user["id"]
+    documents = list(db.documents.find(document_query).sort("uploaded_at", -1))
     return success_response(
         {
             "plant": serialize_plant(plant, [serialize_document(document, []) for document in documents[:4]]),

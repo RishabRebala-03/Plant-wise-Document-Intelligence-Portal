@@ -307,15 +307,46 @@ export const documentsApi = {
     return apiFetchBlob("/documents/export.csv");
   },
 
+  search(params: Record<string, string | number | boolean | undefined>) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== false) {
+        search.set(key, String(value));
+      }
+    });
+    return apiFetch<{ items: DocumentRecord[]; pagination?: { page: number; pageSize: number; total: number } }>(
+      `/documents/search${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+
   exportUrl() {
     return `${API_BASE_URL}/documents/export.csv`;
   },
 };
 
 export const plantsApi = {
-  async list() {
-    const data = await apiFetch<{ summary: Record<string, number>; items: Plant[] }>("/plants");
+  async list(params: Record<string, string | number | boolean | undefined> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== false) {
+        search.set(key, String(value));
+      }
+    });
+    const data = await apiFetch<{ summary: Record<string, number>; items: Plant[]; pagination?: { page: number; pageSize: number; total: number } }>(
+      `/plants${search.toString() ? `?${search.toString()}` : ""}`,
+    );
     return data;
+  },
+  search(params: Record<string, string | number | boolean | undefined>) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== false) {
+        search.set(key, String(value));
+      }
+    });
+    return apiFetch<{ summary: Record<string, number>; items: Plant[]; pagination?: { page: number; pageSize: number; total: number } }>(
+      `/plants/search${search.toString() ? `?${search.toString()}` : ""}`,
+    );
   },
   create(body: Record<string, unknown>) {
     return apiFetch<Plant>("/plants", {
@@ -339,7 +370,13 @@ export const plantsApi = {
 };
 
 export const projectsApi = {
-  list() {
+  list(params: Record<string, string | number | boolean | undefined> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== false) {
+        search.set(key, String(value));
+      }
+    });
     return apiFetch<{
       items: Array<{
         id: string;
@@ -353,9 +390,22 @@ export const projectsApi = {
         createdAt: string | null;
         dueDate: string | null;
         documentIds: string[];
+        documentsCount?: number;
         source: string;
       }>;
-    }>("/projects");
+      pagination?: { page: number; pageSize: number; total: number };
+    }>(`/projects${search.toString() ? `?${search.toString()}` : ""}`);
+  },
+  documents(projectId: string, params: Record<string, string | number | boolean | undefined> = {}) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== false) {
+        search.set(key, String(value));
+      }
+    });
+    return apiFetch<{ items: DocumentRecord[]; pagination: { page: number; pageSize: number; total: number } }>(
+      `/projects/${projectId}/documents${search.toString() ? `?${search.toString()}` : ""}`,
+    );
   },
   create(body: Record<string, unknown>) {
     return apiFetch<{

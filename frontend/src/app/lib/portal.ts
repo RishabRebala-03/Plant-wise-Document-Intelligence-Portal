@@ -11,10 +11,11 @@ export interface ProjectRecord {
   description: string;
   owner: string;
   status: ProjectStatus;
-  createdAt: string;
+  createdAt: string | null;
   dueDate: string | null;
   documentIds: string[];
-  source: "derived" | "custom";
+  documentsCount?: number;
+  source: "derived" | "custom" | "backend";
 }
 
 export interface AccessRule {
@@ -332,27 +333,29 @@ export function enrichDocuments(
   },
 ) {
   const allowedPlantIds =
-    currentUser?.role === "Mining Manager" && currentUser.plantId
-      ? new Set([currentUser.plantId])
+    currentUser?.role === "Mining Manager"
+      ? new Set(currentUser.assignedPlantIds?.length ? currentUser.assignedPlantIds : currentUser.plantId ? [currentUser.plantId] : [])
       : new Set(plants.map((plant) => plant.id));
 
   const enriched: EnrichedDocument[] = documents
     .filter((document) => allowedPlantIds.has(document.plantId))
+    .filter((document) => currentUser?.role !== "Mining Manager" || document.uploadedById === currentUser.id)
     .map((document) => {
       const assignedProjectId = projectAssignments[document.id];
       const project =
+        projects.find((candidate) => candidate.id === document.projectId) ||
         projects.find((candidate) => candidate.id === assignedProjectId) ||
         projects.find((candidate) => candidate.documentIds.includes(document.id)) ||
         projects.find((candidate) => candidate.plantId === document.plantId) || {
           id: "unassigned",
-          name: "Unassigned",
+          name: document.projectName || "Unassigned",
           owner: document.uploadedBy,
         };
 
       return {
         ...document,
         projectId: project.id,
-        projectName: project.name,
+        projectName: document.projectName || project.name,
         managerName: project.owner,
         identifier: `${document.plantId}-${document.id}`,
         accessLocked: false,

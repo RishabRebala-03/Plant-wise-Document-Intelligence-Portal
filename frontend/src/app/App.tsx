@@ -112,7 +112,7 @@ type PortalContextValue = {
   portalState: PortalState;
   loading: boolean;
   refreshData: () => Promise<void>;
-  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => ProjectRecord;
+  createProjectRecord: (draft: Pick<ProjectRecord, "plantId" | "plantName" | "name" | "code" | "description" | "owner" | "dueDate">) => Promise<ProjectRecord>;
   markDocumentLocked: (documentId: string) => void;
   setAccessRules: (rules: AccessRule[]) => Promise<void>;
   setIpRules: (rules: IpRule[]) => void;
@@ -308,9 +308,10 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
   const [loading, setLoading] = useState(true);
 
   async function loadAll() {
-    const [documentsResult, plantsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
+    const [documentsResult, plantsResult, projectsResult, usersResult, notificationsResult, accessRulesResult] = await Promise.all([
       documentsApi.list({ page: 1, pageSize: 500 }),
       plantsApi.list(),
+      projectsApi.list({ page: 1, pageSize: 500 }).catch(() => ({ items: [] as ProjectRecord[] })),
       usersApi.list().catch(() => [] as User[]),
       notificationsApi.list().catch(() => emptyNotifications()),
       settingsApi.listAccessRules().catch(() => ({ items: [] as AccessRule[] })),
@@ -322,13 +323,15 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     setNotifications(notificationsResult.items);
     setPortalState((current) => {
       const next = readPortalState(plantsResult.items, documentsResult.items);
-      return current.projects.length === 0 ? next : {
+      const backendProjects = projectsResult.items as ProjectRecord[];
+      return current.projects.length === 0 ? { ...next, projects: backendProjects.concat(next.projects) } : {
         ...next,
         accessRules: accessRulesResult.items.length ? accessRulesResult.items : next.accessRules,
         ipRules: current.ipRules,
         sessionPolicy: current.sessionPolicy,
         managerDocumentLocks: current.managerDocumentLocks,
-        projects: next.projects.filter((project) => project.source === "derived").concat(
+        projects: backendProjects.concat(
+          next.projects.filter((project) => project.source === "derived"),
           current.projects.filter((project) => project.source === "custom"),
         ),
       };
@@ -404,14 +407,26 @@ function PortalProvider({ user, children }: { user: User; children: ReactNode })
     portalState,
     loading,
     refreshData: loadAll,
-    createProjectRecord: (draft) => {
-      let created: ProjectRecord | null = null;
-      setPortalState((current) => {
-        const next = createProject(current, draft);
-        created = next.projects[next.projects.length - 1];
-        return next;
-      });
-      return created!;
+    createProjectRecord: async (draft) => {
+      try {
+        const created = await projectsApi.create({
+          plantId: draft.plantId,
+          name: draft.name,
+          code: draft.code,
+          description: draft.description,
+          dueDate: draft.dueDate,
+        }) as ProjectRecord;
+        await loadAll();
+        return created;
+      } catch {
+        let created: ProjectRecord | null = null;
+        setPortalState((current) => {
+          const next = createProject(current, draft);
+          created = next.projects[next.projects.length - 1];
+          return next;
+        });
+        return created!;
+      }
     },
     markDocumentLocked: (documentId) => {
       setPortalState((current) => lockManagerDocument(current, user.id, documentId));
@@ -1384,6 +1399,9 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
   const [projectId, setProjectId] = useState(scopedProjectId || searchParams.get("projectId") || "");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [serverDocuments, setServerDocuments] = useState<EnrichedDocument[]>(documents);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 25, total: documents.length });
 
   useEffect(() => {
     if (scopedPlantId) setPlantId(scopedPlantId);
@@ -1421,17 +1439,54 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     [documents],
   );
 
-  const filtered = useMemo(() => documents.filter((document) => {
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setDocumentsLoading(true);
+      const params = {
+        page: 1,
+        pageSize: 25,
+        q: query,
+        plantId,
+        projectId,
+        category,
+        dateFrom,
+        dateTo,
+        sort_by: "uploaded_at",
+        order: "desc",
+      };
+      const request = scopedProjectId ? projectsApi.documents(scopedProjectId, params) : documentsApi.list(params);
+      request
+        .then((result) => {
+          if (!active) return;
+          const enriched = enrichDocuments(result.items, projects, user, plants);
+          setServerDocuments(enriched);
+          setPagination(result.pagination || { page: 1, pageSize: result.items.length || 25, total: result.items.length });
+        })
+        .catch(() => {
+          if (active) setServerDocuments(documents);
+        })
+        .finally(() => {
+          if (active) setDocumentsLoading(false);
+        });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [category, dateFrom, dateTo, documents, plantId, projectId, projects, scopedProjectId, plants, query, user]);
+
+  const filtered = useMemo(() => serverDocuments.filter((document) => {
     const matchesPlant = !plantId || document.plantId === plantId;
     const matchesProject = !projectId || document.projectId === projectId;
     const matchesCategory = !category || document.category === category;
     const matchesManager = !manager || document.managerName === manager;
     const matchesIdentifier = !identifier || document.identifier === identifier;
-    const matchesQuery = !query || document.name === query;
+    const matchesQuery = !query || [document.name, document.plant, document.projectName, document.category, document.uploadedBy].join(" ").toLowerCase().includes(query.toLowerCase());
     const matchesFrom = !dateFrom || Boolean(document.date && document.date >= dateFrom);
     const matchesTo = !dateTo || Boolean(document.date && document.date <= dateTo);
     return matchesPlant && matchesProject && matchesCategory && matchesManager && matchesIdentifier && matchesQuery && matchesFrom && matchesTo;
-  }), [category, dateFrom, dateTo, documents, identifier, manager, plantId, projectId, query]);
+  }), [category, dateFrom, dateTo, identifier, manager, plantId, projectId, query, serverDocuments]);
 
   const availableProjects = projects.filter((project) => !plantId || project.plantId === plantId);
   const categories = Array.from(new Set(documents.map((document) => document.category))).sort((a, b) => a.localeCompare(b));
@@ -1450,12 +1505,10 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
       <SectionCard title={title} subtitle="Separate listing page with advanced search and structured filters">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <FilterField icon={Search} label="Search">
-            <select value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">All documents</option>
-              {queryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} list="document-search-options" placeholder="Search documents, plants, projects..." className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            <datalist id="document-search-options">
+              {queryOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
           </FilterField>
           <FilterField icon={Users} label="Manager">
             <select value={manager} onChange={(event) => setManager(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
@@ -1533,6 +1586,10 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
         </div>
 
         <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+            <span>{documentsLoading ? "Refreshing documents..." : `${pagination.total} document${pagination.total === 1 ? "" : "s"} in current scope`}</span>
+            <span>Backend filtered by project, plant, category, upload date, and search query</span>
+          </div>
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr className="text-left text-sm text-slate-500">
@@ -4501,11 +4558,11 @@ function AppContent() {
           { index: true, element: <Navigate to={defaultHome(user.role)} replace /> },
           { path: "login", element: <Navigate to={defaultHome(user.role)} replace /> },
           { path: "dashboard", element: <DashboardPage /> },
-          { path: "plants", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantIndexPage /></RoleGate> },
-          { path: "plants/:plantId", element: <RoleGate allowed={["CEO", "Mining Manager"]}><PlantProjectsPage /></RoleGate> },
+          { path: "plants", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><PlantIndexPage /></RoleGate> },
+          { path: "plants/:plantId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><PlantProjectsPage /></RoleGate> },
           { path: "plants/:plantId/projects/new", element: <RoleGate allowed={["Mining Manager"]} capability="canCreateProjects"><ProjectCreatePage /></RoleGate> },
-          { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><ProjectDocumentsPage /></RoleGate> },
-          { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager"]}><DocumentsPage /></RoleGate> },
+          { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><ProjectDocumentsPage /></RoleGate> },
+          { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentDetailPage /></RoleGate> },
           { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
