@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Building2, TrendingUp, AlertCircle, MapPin, Clock } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, plantsApi } from "../lib/api";
 import type { Plant } from "../lib/types";
 
@@ -56,59 +55,60 @@ export function CeoPlants() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-5 mb-8">
-        {[
-          { label: "Total Plants", value: summary.totalPlants, icon: Building2, color: "#0A6ED1", bg: "#EBF4FD" },
-          { label: "Operational", value: summary.operational, icon: TrendingUp, color: "#107E3E", bg: "#EBF5EF" },
-          { label: "Needs Attention", value: summary.needsAttention, icon: AlertCircle, color: "#E9730C", bg: "#FEF3E7" },
-        ].map((stat) => (
-          <div key={stat.label} className="bg-white border border-[#e8e8e8] px-5 py-4 flex items-center gap-4">
-            <div className="w-10 h-10 flex items-center justify-center shrink-0" style={{ background: stat.bg }}>
-              <stat.icon size={18} style={{ color: stat.color }} />
-            </div>
-            <div>
-              <div className="text-[#1a1a1a]" style={{ fontSize: 24, fontWeight: 600 }}>{stat.value}</div>
-              <div className="text-[#6a6d70]" style={{ fontSize: 12 }}>{stat.label}</div>
-            </div>
-          </div>
-        ))}
+      <div className="data-table-panel mb-8">
+        <div className="data-table-toolbar">
+          <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>Plant Summary</span>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Total Plants</th>
+                <th>Operational</th>
+                <th>Needs Attention</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-strong">{summary.totalPlants}</td>
+                <td className="text-strong">{summary.operational}</td>
+                <td className="text-strong">{summary.needsAttention}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
-        {plants.map((plant) => (
-          <div key={plant.id} className="bg-white border border-[#e8e8e8]">
-            <div className="h-1.5 bg-[#0A6ED1]" />
-            <div className="p-5">
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
-                  <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 600 }}>
-                    {plant.name}
-                  </span>
-                  <div className="flex items-center gap-1 text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
-                    <MapPin size={11} /> {plant.location || "-"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                {[
-                  { label: "Documents", value: plant.documents },
-                  { label: "Capacity", value: plant.capacity || "-" },
-                  { label: "Manager", value: plant.manager || "-" },
-                ].map((item) => (
-                  <div key={item.label} className="bg-[#fafafa] px-3 py-2.5">
-                    <div className="text-[#1a1a1a]" style={{ fontSize: 13, fontWeight: 600 }}>{item.value}</div>
-                    <div className="text-[#999]" style={{ fontSize: 10 }}>{item.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-1 text-[#6a6d70]" style={{ fontSize: 12 }}>
-                <Clock size={11} /> Last upload: {plant.lastUpload || "-"}
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="data-table-panel">
+        <div className="data-table-toolbar">
+          <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>All Plants</span>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Plant</th>
+                <th>Location</th>
+                <th>Documents</th>
+                <th>Capacity</th>
+                <th>Manager</th>
+                <th>Last Upload</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plants.map((plant) => (
+                <tr key={plant.id}>
+                  <td className="text-strong">{plant.name}</td>
+                  <td>{plant.location || "-"}</td>
+                  <td>{plant.documents}</td>
+                  <td>{plant.capacity || "-"}</td>
+                  <td>{plant.manager || "-"}</td>
+                  <td>{plant.lastUpload || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

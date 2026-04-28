@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { ArrowRight } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 export function LoginPage() {
@@ -28,34 +27,17 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.14),_transparent_30%),linear-gradient(180deg,_#eef4f8_0%,_#f8fbfd_100%)] px-5 py-8">
-      <div className="grid w-full max-w-[840px] overflow-hidden rounded-[32px] border border-white/80 bg-white/96 shadow-[0_28px_70px_rgba(15,23,42,0.12)] backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
-        <div className="hidden bg-[linear-gradient(155deg,_#0f172a_0%,_#153b56_100%)] p-10 text-white lg:flex lg:flex-col lg:justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-[0.28em] text-white/55">Midwest Operations Portal</div>
-            <h2 className="mt-5 text-3xl font-semibold tracking-tight">Secure access for document control and plant operations</h2>
-            <p className="mt-4 text-sm leading-7 text-slate-200/85">
-              Sign in to continue into your role-based workspace with governed access, scoped visibility, and monitored sessions.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <div className="rounded-[24px] border border-white/12 bg-white/10 px-5 py-4 text-sm text-slate-100/90">
-              Role-aware dashboards and access-controlled workflows
-            </div>
-            <div className="rounded-[24px] border border-white/12 bg-white/10 px-5 py-4 text-sm text-slate-100/90">
-              Session, IP, and activity protections running in the background
-            </div>
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(10,110,209,0.13),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(15,118,110,0.12),_transparent_26%),linear-gradient(180deg,_#f7f9fb,_#eef3f7)] px-5 py-8">
+      <div className="w-full max-w-[460px] overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_28px_80px_rgba(15,23,42,0.16)] backdrop-blur">
+        <div className="h-3 bg-[linear-gradient(90deg,_#0A6ED1,_#0f766e,_#354A5F)]" />
+        <div className="bg-[linear-gradient(135deg,_#0f172a,_#164e63)] px-8 py-7">
+          <div className="flex items-center justify-center rounded-[22px] border border-white/10 bg-white px-6 py-5 shadow-[0_18px_45px_rgba(15,23,42,0.18)]">
+            <img src="/midwest-logo.svg" alt="Midwest logo" className="h-12 w-auto" />
           </div>
         </div>
-
         <div className="p-8 md:p-10">
           <div className="flex flex-col items-center text-center">
-            <div className="flex w-full max-w-[280px] items-center justify-center rounded-[24px] border border-slate-200 bg-white px-6 py-5 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
-              <img src="/midwest-logo.svg" alt="Midwest logo" className="h-12 w-auto" />
-            </div>
-            <h1 className="mt-6 text-3xl font-semibold tracking-tight text-slate-950">Sign in</h1>
-            <p className="mt-2 text-sm text-slate-500">Enter your email and password to continue.</p>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Sign in</h1>
           </div>
 
           <form onSubmit={handleSubmit} className="mx-auto mt-8 max-w-[420px] space-y-5">
@@ -65,8 +47,7 @@ export function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="name@midwestltd.com"
-                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-teal-500"
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-[#0A6ED1] focus:ring-4 focus:ring-[#0A6ED1]/10"
               />
             </label>
 
@@ -76,8 +57,7 @@ export function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter your password"
-                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-teal-500"
+                className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-[#0A6ED1] focus:ring-4 focus:ring-[#0A6ED1]/10"
               />
             </label>
 
@@ -86,10 +66,9 @@ export function LoginPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-slate-950 px-5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(15,23,42,0.16)] transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? "Signing in..." : "Sign in"}
-              <ArrowRight size={16} />
             </button>
           </form>
         </div>

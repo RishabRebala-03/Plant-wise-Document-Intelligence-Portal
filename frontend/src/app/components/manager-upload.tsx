@@ -278,7 +278,7 @@ export function ManagerUpload() {
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">Upload workspace</div>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Submit documents inside your assigned operating scope</h1>
             <p className="mt-3 text-sm leading-6 text-white/72">
-              Plants, projects, and recent uploads shown here are limited to what is assigned to your account. The upload flow now mirrors the rest of the portal with scoped cards, guided selections, and clearer review states.
+              Plants, projects, and recent uploads shown here are limited to what is assigned to your account. The upload flow uses structured tables, guided selections, and clearer review states.
             </p>
           </div>
           <div className="grid min-w-[280px] gap-3 rounded-[28px] border border-white/10 bg-white/6 p-4">
@@ -292,30 +292,41 @@ export function ManagerUpload() {
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <button type="button" onClick={() => navigate("/documents")} className="rounded-3xl border border-white/80 bg-gradient-to-br from-[#D1E8FF]/80 to-[#EAF3FC] p-5 text-left shadow-[0_18px_40px_rgba(15,23,42,0.07)] transition hover:-translate-y-0.5 hover:shadow-[0_22px_48px_rgba(15,23,42,0.12)]">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">Scoped documents</span>
-            <div className="rounded-2xl bg-white/80 p-2 text-[#0A6ED1]"><FileText size={18} /></div>
-          </div>
-          <div className="text-3xl font-semibold tracking-tight text-slate-950">{data.stats.myDocuments}</div>
-          <div className="mt-2 text-sm text-slate-500">Documents currently tied to your assigned scope.</div>
-        </button>
-        <div className="rounded-3xl border border-white/80 bg-gradient-to-br from-[#107E3E]/12 to-[#D5F6DE]/40 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.07)]">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">Uploaded this week</span>
-            <div className="rounded-2xl bg-white/80 p-2 text-[#107E3E]"><Clock3 size={18} /></div>
-          </div>
-          <div className="text-3xl font-semibold tracking-tight text-slate-950">{data.stats.uploadedThisWeek}</div>
-          <div className="mt-2 text-sm text-slate-500">Recent document movement attributed to your upload lane.</div>
+      <div className="data-table-panel">
+        <div className="data-table-toolbar">
+          <span className="text-sm font-semibold text-slate-900">Upload Workspace Summary</span>
         </div>
-        <div className="rounded-3xl border border-white/80 bg-gradient-to-br from-[#EAECEE] to-[#F5F6F7] p-5 shadow-[0_18px_40px_rgba(15,23,42,0.07)]">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">Available projects</span>
-            <div className="rounded-2xl bg-white/80 p-2 text-[#354A5F]"><FolderKanban size={18} /></div>
-          </div>
-          <div className="text-3xl font-semibold tracking-tight text-slate-950">{availableProjects.length}</div>
-          <div className="mt-2 text-sm text-slate-500">Projects available for the currently selected plant.</div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Context</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-strong"><span className="inline-flex items-center gap-2"><FileText size={15} />Scoped documents</span></td>
+                <td>{data.stats.myDocuments}</td>
+                <td>Documents currently tied to your assigned scope.</td>
+                <td><button type="button" onClick={() => navigate("/documents")} className="text-[#0A6ED1] hover:underline">Open listing</button></td>
+              </tr>
+              <tr>
+                <td className="text-strong"><span className="inline-flex items-center gap-2"><Clock3 size={15} />Uploaded this week</span></td>
+                <td>{data.stats.uploadedThisWeek}</td>
+                <td>Recent document movement attributed to your upload lane.</td>
+                <td>-</td>
+              </tr>
+              <tr>
+                <td className="text-strong"><span className="inline-flex items-center gap-2"><FolderKanban size={15} />Available projects</span></td>
+                <td>{availableProjects.length}</td>
+                <td>Projects available for the currently selected plant.</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -331,23 +342,29 @@ export function ManagerUpload() {
             </div>
           </div>
 
-          <div className="mb-6 grid gap-3 md:grid-cols-2">
-            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Allowed formats</div>
-              <div className="mt-2 text-sm font-semibold text-slate-900">
-                {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "No formats configured"}
-              </div>
-              <div className="mt-2 text-sm text-slate-500">Only these formats can be attached in this workspace.</div>
-            </div>
-            <div className={`rounded-[24px] border px-4 py-4 ${uploadAllowedNow ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/80"}`}>
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-slate-500">
-                <Clock3 size={14} />
-                Upload window
-              </div>
-              <div className="mt-2 text-sm font-semibold text-slate-900">{describeBusinessHours(governancePolicy)}</div>
-              <div className={`mt-2 text-sm ${uploadAllowedNow ? "text-emerald-700" : "text-amber-800"}`}>
-                {uploadAllowedNow ? "Uploads are currently allowed." : "Uploads are currently blocked outside the configured business hours."}
-              </div>
+          <div className="data-table-panel mb-6">
+            <div className="data-table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Rule</th>
+                    <th>Configuration</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td className="text-strong">Allowed formats</td>
+                    <td>{governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "No formats configured"}</td>
+                    <td>Only these formats can be attached in this workspace.</td>
+                  </tr>
+                  <tr>
+                    <td className="text-strong">Upload window</td>
+                    <td>{describeBusinessHours(governancePolicy)}</td>
+                    <td>{uploadAllowedNow ? "Uploads are currently allowed." : "Uploads are currently blocked outside the configured business hours."}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -496,19 +513,39 @@ export function ManagerUpload() {
             <h2 className="text-lg font-semibold text-slate-900">Recent uploads in your scope</h2>
             <p className="mt-1 text-sm text-slate-500">Only documents tied to your assigned plants are listed here.</p>
           </div>
-          <div className="space-y-3">
-            {data.recentUploads.map((document) => (
-              <button key={document.id} onClick={() => void openDocument(document)} className="w-full rounded-3xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300 hover:bg-white">
-                <div className="font-semibold text-slate-900">{document.name}</div>
-                <div className="mt-2 text-sm text-slate-500">{document.plant} · {document.category}</div>
-                <div className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-400">{document.date || "-"}</div>
-              </button>
-            ))}
-            {!data.recentUploads.length ? (
-              <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-                No recent uploads are available for your assigned scope yet.
-              </div>
-            ) : null}
+          <div className="data-table-panel">
+            <div className="data-table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Document</th>
+                    <th>Plant</th>
+                    <th>Category</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.recentUploads.length ? (
+                    data.recentUploads.map((document) => (
+                      <tr key={document.id}>
+                        <td className="text-strong">{document.name}</td>
+                        <td>{document.plant}</td>
+                        <td>{document.category}</td>
+                        <td>{document.date || "-"}</td>
+                        <td>
+                          <button onClick={() => void openDocument(document)} className="text-[#0A6ED1] hover:underline">
+                            Open
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr><td colSpan={5}>No recent uploads are available for your assigned scope yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       </div>

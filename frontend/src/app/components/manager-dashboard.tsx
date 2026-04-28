@@ -85,30 +85,40 @@ export function ManagerDashboard() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-        {insightCards.map((card) => (
-          <div key={card.label} className="bg-white border border-[#e8e8e8] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="w-10 h-10 flex items-center justify-center" style={{ background: card.bg }}>
-                <card.icon size={18} style={{ color: card.color }} />
-              </div>
-              <BarChart2 size={14} className="text-[#5B738B]" />
-            </div>
-            <div className="text-[#1a1a1a]" style={{ fontSize: 28, fontWeight: 600, lineHeight: 1 }}>
-              {card.value}
-            </div>
-            <div className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
-              {card.label}
-            </div>
-            <div className="text-[#6a6d70] mt-2" style={{ fontSize: 11 }}>
-              {card.note}
-            </div>
-          </div>
-        ))}
+      <div className="data-table-panel mb-8">
+        <div className="data-table-toolbar flex items-center gap-2">
+          <BarChart2 size={14} className="text-[#5B738B]" />
+          <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>Plant Insights</span>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Context</th>
+              </tr>
+            </thead>
+            <tbody>
+              {insightCards.map((card) => (
+                <tr key={card.label}>
+                  <td className="text-strong">
+                    <span className="inline-flex items-center gap-2">
+                      <card.icon size={15} style={{ color: card.color }} />
+                      {card.label}
+                    </span>
+                  </td>
+                  <td className="text-strong">{card.value}</td>
+                  <td>{card.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white border border-[#e8e8e8]">
+        <div className="lg:col-span-2 data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileText size={14} className="text-[#0A6ED1]" />
@@ -124,7 +134,8 @@ export function ManagerDashboard() {
               View all <ArrowRight size={12} />
             </button>
           </div>
-          <table className="w-full">
+          <div className="data-table-scroll">
+          <table className="data-table">
             <thead>
               <tr className="bg-[#fafafa] text-left border-b border-[#f0f0f0]">
                 {["Document Name", "Category", "Date"].map((heading) => (
@@ -152,66 +163,85 @@ export function ManagerDashboard() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
 
-        <div className="bg-white border border-[#e8e8e8]">
+        <div className="data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center gap-2">
             <Activity size={14} className="text-[#107E3E]" />
             <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
               Recent Activity
             </span>
           </div>
-          <div className="divide-y divide-[#f7f7f7]">
-            {data.activity.length === 0 ? (
-              <div className="px-5 py-6 text-[#6a6d70]" style={{ fontSize: 13 }}>
-                No recent activity.
-              </div>
-            ) : (
-              data.activity.slice(0, 6).map((item) => (
-                <div key={item.id} className="px-5 py-4">
-                  <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>
-                    {item.action}
-                  </div>
-                  <div className="text-[#6a6d70] mt-1" style={{ fontSize: 11 }}>
-                    {item.documentName || item.entityType} · {item.createdAt || "-"}
-                  </div>
-                </div>
-              ))
-            )}
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Record</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.activity.length === 0 ? (
+                  <tr><td colSpan={3}>No recent activity.</td></tr>
+                ) : (
+                  data.activity.slice(0, 6).map((item) => (
+                    <tr key={item.id}>
+                      <td className="text-strong">{item.action}</td>
+                      <td>{item.documentName || item.entityType}</td>
+                      <td>{item.createdAt || "-"}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
 
-      <div className="mt-6 bg-white border border-[#e8e8e8]">
+      <div className="mt-6 data-table-panel">
         <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center gap-2">
           <AlertCircle size={14} className="text-[#E9730C]" />
           <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
             Focus Areas
           </span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-5">
-          <div className="border border-[#e8e8e8] bg-[#fafafa] p-4">
-            <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>Submission cadence</div>
-            <div className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
-              {data.stats.uploadedThisWeek} uploads recorded this week.
-            </div>
-          </div>
-          <div className="border border-[#e8e8e8] bg-[#fafafa] p-4">
-            <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>Approval health</div>
-            <div className="text-[#6a6d70] mt-1" style={{ fontSize: 12 }}>
-              {data.stats.approved} documents are already approved.
-            </div>
-          </div>
-          <div className="border border-[#e8e8e8] bg-[#fafafa] p-4">
-            <div className="text-[#333]" style={{ fontSize: 13, fontWeight: 500 }}>Next action</div>
-            <button
-              onClick={() => navigate("/manager")}
-              className="mt-2 text-[#0A6ED1] hover:underline cursor-pointer"
-              style={{ fontSize: 12, fontWeight: 500 }}
-            >
-              Go to upload workflow
-            </button>
-          </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Focus Area</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-strong">Submission cadence</td>
+                <td>{data.stats.uploadedThisWeek} uploads recorded this week.</td>
+                <td>-</td>
+              </tr>
+              <tr>
+                <td className="text-strong">Approval health</td>
+                <td>{data.stats.approved} documents are already approved.</td>
+                <td>-</td>
+              </tr>
+              <tr>
+                <td className="text-strong">Next action</td>
+                <td>Upload workflow is available.</td>
+                <td>
+                  <button
+                    onClick={() => navigate("/manager")}
+                    className="text-[#0A6ED1] hover:underline cursor-pointer"
+                    style={{ fontSize: 12, fontWeight: 500 }}
+                  >
+                    Open upload workflow
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

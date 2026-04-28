@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Clock3, Download, Eye, FileSpreadsheet, MessageSquare, Pencil, Trash2, Upload, X } from "lucide-react";
+import { Clock3, Download, Eye, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
 import type { Activity } from "../lib/types";
 
 interface DetailedActivityLogProps {
@@ -78,25 +78,6 @@ function activitySummary(activity: Activity) {
       return `${actor} deleted ${target}${plant}.`;
     default:
       return `${actor} recorded a ${activity.action.toLowerCase()} event on ${target}.`;
-  }
-}
-
-function activityMeta(action: string) {
-  switch (action) {
-    case "Uploaded":
-      return { icon: Upload, badge: "Upload", accent: "text-sky-700", badgeClass: "bg-sky-100 text-sky-700", panelClass: "bg-sky-50" };
-    case "Viewed":
-      return { icon: Eye, badge: "Viewed", accent: "text-amber-600", badgeClass: "bg-amber-100 text-amber-700", panelClass: "bg-amber-50" };
-    case "Downloaded":
-      return { icon: Download, badge: "Download", accent: "text-emerald-700", badgeClass: "bg-emerald-100 text-emerald-700", panelClass: "bg-emerald-50" };
-    case "Updated":
-      return { icon: Pencil, badge: "Updated", accent: "text-violet-700", badgeClass: "bg-violet-100 text-violet-700", panelClass: "bg-violet-50" };
-    case "Commented":
-      return { icon: MessageSquare, badge: "Commented", accent: "text-orange-700", badgeClass: "bg-orange-100 text-orange-700", panelClass: "bg-orange-50" };
-    case "Deleted":
-      return { icon: Trash2, badge: "Deleted", accent: "text-rose-700", badgeClass: "bg-rose-100 text-rose-700", panelClass: "bg-rose-50" };
-    default:
-      return { icon: Clock3, badge: action, accent: "text-slate-600", badgeClass: "bg-slate-100 text-slate-700", panelClass: "bg-slate-100" };
   }
 }
 
@@ -358,33 +339,49 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
 
   return (
     <div>
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {[
-          { key: "", label: "All Activity", value: counts.total, icon: Clock3, colorClass: "text-sky-700", bgClass: "bg-sky-50" },
-          { key: "uploaded", label: "Uploads", value: counts.uploaded, icon: Upload, colorClass: "text-sky-700", bgClass: "bg-sky-50" },
-          { key: "viewed", label: "Views", value: counts.viewed, icon: Eye, colorClass: "text-amber-600", bgClass: "bg-amber-50" },
-          { key: "downloaded", label: "Downloads", value: counts.downloaded, icon: Download, colorClass: "text-emerald-700", bgClass: "bg-emerald-50" },
-          { key: "updated", label: "Updates", value: counts.updated, icon: Pencil, colorClass: "text-violet-700", bgClass: "bg-violet-50" },
-        ].map((stat) => (
-          <button
-            key={stat.label}
-            type="button"
-            onClick={() => setActionFilter(actionFilter === stat.key ? "" : stat.key)}
-            className={`flex items-center gap-3 rounded-[28px] border px-4 py-5 text-left shadow-[0_18px_40px_rgba(15,23,42,0.07)] transition ${
-              actionFilter === stat.key
-                ? "border-teal-300 bg-white ring-2 ring-teal-100"
-                : "border-white/80 bg-white/90 hover:-translate-y-0.5 hover:shadow-[0_22px_46px_rgba(15,23,42,0.1)]"
-            }`}
-          >
-            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${stat.bgClass}`}>
-              <stat.icon size={18} className={stat.colorClass} />
-            </div>
-            <div>
-              <div className="text-[2rem] font-semibold leading-none tracking-tight text-slate-950">{stat.value}</div>
-              <div className="mt-1 text-sm font-medium text-slate-500">{stat.label}</div>
-            </div>
-          </button>
-        ))}
+      <div className="data-table-panel mb-6">
+        <div className="data-table-toolbar flex items-center gap-2">
+          <Clock3 size={16} className="text-teal-700" />
+          <span className="text-base font-semibold text-slate-900">Activity Summary</span>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Count</th>
+                <th>Filter</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { key: "", label: "All Activity", value: counts.total },
+                { key: "uploaded", label: "Uploads", value: counts.uploaded },
+                { key: "viewed", label: "Views", value: counts.viewed },
+                { key: "downloaded", label: "Downloads", value: counts.downloaded },
+                { key: "updated", label: "Updates", value: counts.updated },
+              ].map((stat) => (
+                <tr key={stat.label}>
+                  <td className="text-strong">{stat.label}</td>
+                  <td>{stat.value}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => setActionFilter(actionFilter === stat.key ? "" : stat.key)}
+                      className={`h-8 border px-3 text-sm ${
+                        actionFilter === stat.key
+                          ? "border-teal-300 bg-teal-50 text-teal-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {actionFilter === stat.key ? "Active" : "Apply"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="mb-5 flex flex-wrap items-center gap-3 rounded-[28px] border border-white/70 bg-white/90 px-5 py-4 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur">
@@ -453,7 +450,7 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-[32px] border border-white/70 bg-white/90 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur">
+      <div className="data-table-panel">
         <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2">
             <Clock3 size={16} className="text-teal-700" />
@@ -469,60 +466,45 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
             No activity matched your current filters.
           </div>
         ) : (
-          grouped.map((group) => (
-            <div key={group.title} className="border-b border-slate-100 last:border-b-0">
-              <div className="bg-slate-50/80 px-5 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                {group.title}
-              </div>
-              <div className="divide-y divide-slate-100">
-                {group.items.map((activity) => {
-                  const meta = activityMeta(activity.action);
-                  const rows = detailRows(activity);
-                  return (
-                    <div key={activity.id} className="px-5 py-5 transition-colors hover:bg-slate-50/50">
-                      <div className="mb-4 flex items-start justify-between gap-4">
-                        <div className="flex min-w-0 items-start gap-3">
-                          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${meta.panelClass}`}>
-                            <meta.icon size={16} className={meta.accent} />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="mb-1 flex flex-wrap items-center gap-2">
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${meta.badgeClass}`}>
-                                {meta.badge}
-                              </span>
-                              <span className="text-sm font-semibold text-slate-900">
-                                {activityTitle(activity)}
-                              </span>
-                            </div>
-                            <div className="text-sm text-slate-500">
-                              {activitySummary(activity)}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-sm font-medium text-slate-800">
-                            {formatDate(activity.createdAt)}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-400">
-                            {activity.id}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2">
-                        {rows.map((row) => (
-                          <div key={`${activity.id}-${row.label}`} className="flex gap-3 text-sm">
-                            <span className="w-32 shrink-0 text-slate-500">{row.label}</span>
-                            <span className="break-words text-slate-800">{row.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Group</th>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Title</th>
+                  <th>Summary</th>
+                  <th>Actor</th>
+                  <th>Record Type</th>
+                  <th>Details</th>
+                  <th>Audit Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {grouped.flatMap((group) =>
+                  group.items.map((activity) => {
+                    const rows = detailRows(activity);
+                    return (
+                      <tr key={activity.id}>
+                        <td>{group.title}</td>
+                        <td>{formatDate(activity.createdAt)}</td>
+                        <td className="text-strong">{activity.action}</td>
+                        <td className="text-strong">{activityTitle(activity)}</td>
+                        <td className="min-w-[320px]">{activitySummary(activity)}</td>
+                        <td>{activity.userName || activity.userId || "Not available"}</td>
+                        <td>{formatEntityType(activity.entityType)}</td>
+                        <td className="min-w-[420px]">
+                          {rows.map((row) => `${row.label}: ${row.value}`).join(" | ")}
+                        </td>
+                        <td>{activity.id}</td>
+                      </tr>
+                    );
+                  }),
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

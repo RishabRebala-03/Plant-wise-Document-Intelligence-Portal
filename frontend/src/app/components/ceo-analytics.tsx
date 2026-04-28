@@ -52,8 +52,6 @@ export function CeoAnalytics() {
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading analytics...</div>;
   if (error || !data) return <div className="p-7 text-[#BB0000]">{error || "Analytics unavailable."}</div>;
 
-  const maxMonthly = Math.max(...data.monthlyUploads.map((row) => row.uploads), 1);
-
   return (
     <div className="p-7 max-w-[1400px]">
       <div className="mb-7 flex items-start justify-between gap-4">
@@ -100,101 +98,136 @@ export function CeoAnalytics() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        {[
-          { label: "Total Uploads", value: data.summary.totalUploads, sub: "All time", color: "#0A6ED1", bg: "#EBF4FD" },
-          { label: "Monthly Avg.", value: data.summary.monthlyAverage, sub: "Per selected period", color: "#107E3E", bg: "#EBF5EF" },
-          { label: "Peak Month", value: data.summary.peakMonth.month || "-", sub: `${data.summary.peakMonth.uploads} uploads`, color: "#E9730C", bg: "#FEF3E7" },
-          { label: "Top Plant", value: data.summary.topPlant.name || "-", sub: `${data.summary.topPlant.documents} documents`, color: "#945ECF", bg: "#F5EEF8" },
-        ].map((kpi) => (
-          <div key={kpi.label} className="bg-white border border-[#e8e8e8] px-5 py-5">
-            <div className="w-8 h-8 flex items-center justify-center mb-3" style={{ background: kpi.bg }}>
-              <BarChart2 size={15} style={{ color: kpi.color }} />
-            </div>
-            <div className="text-[#1a1a1a]" style={{ fontSize: 26, fontWeight: 600 }}>{kpi.value}</div>
-            <div className="text-[#6a6d70]" style={{ fontSize: 12 }}>{kpi.label}</div>
-            <div className="text-[#999] mt-0.5" style={{ fontSize: 11 }}>{kpi.sub}</div>
-          </div>
-        ))}
+      <div className="data-table-panel mb-8">
+        <div className="data-table-toolbar flex items-center gap-2">
+          <BarChart2 size={14} className="text-[#0A6ED1]" />
+          <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>Analytics Summary</span>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Context</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: "Total Uploads", value: data.summary.totalUploads, sub: "All time" },
+                { label: "Monthly Avg.", value: data.summary.monthlyAverage, sub: "Per selected period" },
+                { label: "Peak Month", value: data.summary.peakMonth.month || "-", sub: `${data.summary.peakMonth.uploads} uploads` },
+                { label: "Top Plant", value: data.summary.topPlant.name || "-", sub: `${data.summary.topPlant.documents} documents` },
+              ].map((kpi) => (
+                <tr key={kpi.label}>
+                  <td className="text-strong">{kpi.label}</td>
+                  <td className="text-strong">{kpi.value}</td>
+                  <td>{kpi.sub}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <div className="bg-white border border-[#e8e8e8]">
+        <div className="data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center gap-2">
             <TrendingUp size={14} className="text-[#0A6ED1]" />
             <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
               Monthly Upload Trend
             </span>
           </div>
-          <div className="p-5">
-            <div className="flex items-end gap-3 h-36">
-              {data.monthlyUploads.map((row) => {
-                const height = Math.round((row.uploads / maxMonthly) * 100);
-                return (
-                  <div key={row.month} className="flex-1 flex flex-col items-center gap-1">
-                    <span className="text-[#0A6ED1]" style={{ fontSize: 10 }}>{row.uploads}</span>
-                    <div className="w-full flex items-end" style={{ height: 100 }}>
-                      <div className="w-full bg-[#0A6ED1]" style={{ height: `${height}%`, minHeight: 4 }} />
-                    </div>
-                    <span className="text-[#6a6d70]" style={{ fontSize: 11 }}>{row.month}</span>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Uploads</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.monthlyUploads.map((row) => (
+                  <tr key={row.month}>
+                    <td className="text-strong">{row.month}</td>
+                    <td>{row.uploads}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <div className="bg-white border border-[#e8e8e8]">
+        <div className="data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center gap-2">
             <BarChart2 size={14} className="text-[#0A6ED1]" />
             <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
               Category Distribution
             </span>
           </div>
-          <div className="p-5 space-y-3">
-            {data.categoryDistribution.map((row) => (
-              <div key={row.category} className="flex items-center gap-3">
-                <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: row.color }} />
-                <span className="w-44 text-[#555] shrink-0 truncate" style={{ fontSize: 12 }}>{row.category}</span>
-                <div className="flex-1 h-2 bg-[#f0f0f0]">
-                  <div className="h-full" style={{ width: `${row.pct}%`, background: row.color }} />
-                </div>
-                <span className="text-[#333] w-8 text-right shrink-0" style={{ fontSize: 12 }}>{row.pct}%</span>
-              </div>
-            ))}
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Share</th>
+                  <th>Color</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.categoryDistribution.map((row) => (
+                  <tr key={row.category}>
+                    <td className="text-strong">{row.category}</td>
+                    <td>{row.pct}%</td>
+                    <td>
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-3 w-3 border border-[#d9d9d9]" style={{ background: row.color }} />
+                        {row.color}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-[#e8e8e8]">
+        <div className="data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0]">
             <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
               Plant Document Volume
             </span>
           </div>
-          <div className="p-5 space-y-4">
-            {data.plantVolume.map((plant) => {
-              const pct = Math.max(4, Math.round((plant.documents / Math.max(data.summary.totalUploads, 1)) * 100));
-              return (
-                <div key={plant.id}>
-                  <div className="flex justify-between mb-1.5" style={{ fontSize: 13 }}>
-                    <span className="text-[#333]">{plant.name}</span>
-                    <span className="text-[#333]" style={{ fontWeight: 500 }}>{plant.documents}</span>
-                  </div>
-                  <div className="h-2 bg-[#f0f0f0]">
-                    <div className="h-full bg-[#0A6ED1]" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="text-[#999] mt-1" style={{ fontSize: 11 }}>
-                    Last upload {plant.lastUpload || "-"}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Plant</th>
+                  <th>Documents</th>
+                  <th>Last Upload</th>
+                  <th>Share of Uploads</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.plantVolume.map((plant) => {
+                  const pct = Math.round((plant.documents / Math.max(data.summary.totalUploads, 1)) * 100);
+                  return (
+                    <tr key={plant.id}>
+                      <td className="text-strong">{plant.name}</td>
+                      <td>{plant.documents}</td>
+                      <td>{plant.lastUpload || "-"}</td>
+                      <td>{pct}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <div className="bg-white border border-[#e8e8e8]">
+        <div className="data-table-panel">
           <div className="px-5 py-4 border-b border-[#f0f0f0] flex items-center justify-between">
             <span className="text-[#1a1a1a]" style={{ fontSize: 14, fontWeight: 500 }}>
               Top Uploaders
@@ -203,7 +236,8 @@ export function CeoAnalytics() {
               <Calendar size={12} /> Current data
             </div>
           </div>
-          <table className="w-full">
+          <div className="data-table-scroll">
+          <table className="data-table">
             <thead>
               <tr className="bg-[#fafafa] border-b border-[#f0f0f0] text-left">
                 {["#", "Name", "Documents", "Plants"].map((heading) => (
@@ -224,6 +258,7 @@ export function CeoAnalytics() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

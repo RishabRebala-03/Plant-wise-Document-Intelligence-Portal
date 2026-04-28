@@ -34,3 +34,111 @@ textarea:disabled {
   animation: messageBubblePop 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
   transform-origin: bottom right;
 }
+
+.data-table-panel {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 28px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+.data-table-toolbar {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-bottom: 1px solid #e5eaf0;
+  padding: 16px 20px;
+}
+
+.data-table-toolbar h1,
+.data-table-toolbar h2,
+.data-table-toolbar h3 {
+  color: #111827;
+  letter-spacing: 0;
+}
+
+.data-table-scroll {
+  max-height: 520px;
+  overflow: auto;
+  scrollbar-color: #b8c5d4 transparent;
+  scrollbar-width: thin;
+}
+
+.data-table-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.data-table-scroll::-webkit-scrollbar-thumb {
+  background: #b8c5d4;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.data-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 760px;
+  width: 100%;
+}
+
+.data-table thead th {
+  background: #f7f9fb;
+  border-bottom: 1px solid #d9e1ec;
+  color: #354a5f;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 13px 18px;
+  position: sticky;
+  text-align: left;
+  top: 0;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.data-table thead th + th,
+.data-table tbody td + td {
+  border-left: 1px solid #eef2f6;
+}
+
+.data-table tbody td {
+  background: #fff;
+  border-bottom: 1px solid #edf1f5;
+  color: #425466;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 15px 18px;
+  vertical-align: top;
+}
+
+.data-table tbody tr:nth-child(even) td {
+  background: #fbfcfe;
+}
+
+.data-table tbody tr:hover td {
+  background: #eef6ff;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table .text-strong {
+  color: #111827;
+  font-weight: 600;
+}
+
+.data-table .text-muted {
+  color: #64748b;
+}
+
+.data-table a,
+.data-table button {
+  color: #0a6ed1;
+}

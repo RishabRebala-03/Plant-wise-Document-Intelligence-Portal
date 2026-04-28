@@ -167,35 +167,33 @@ export function DocumentDrawer({
 
           <div className="flex-1 overflow-auto px-5 py-5 sm:px-6">
             <div className="space-y-5">
-              <section className="rounded-[28px] border border-[#dce4f0] bg-white p-5 shadow-[0_18px_55px_rgba(17,24,39,0.08)]">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <div className="text-[#1f2937]" style={{ fontSize: 18, fontWeight: 600 }}>
-                      {doc.name}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
-                      <span className="rounded-full bg-[#e8f0fb] px-3 py-1 font-medium text-[#0A6ED1]">
-                        {doc.category}
-                      </span>
-                      <span className="rounded-full bg-[#eef3f8] px-3 py-1 font-medium text-[#47607a]">
-                        {doc.plant}
-                      </span>
-                      <span className="rounded-full bg-[#f4f6fb] px-3 py-1 text-[#6a7685]">
-                        v{doc.version}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="min-w-[180px] rounded-2xl border border-[#e6edf5] bg-[#f8fbff] px-4 py-3">
-                    <div className="text-[#66788a]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                      Uploaded By
-                    </div>
-                    <div className="mt-1 text-[#1f2937]" style={{ fontSize: 14, fontWeight: 600 }}>
-                      {doc.uploadedBy}
-                    </div>
-                    <div className="mt-1 text-[#718096]" style={{ fontSize: 12 }}>
-                      {doc.date || "Date unavailable"}
-                    </div>
-                  </div>
+              <section className="data-table-panel">
+                <div className="data-table-toolbar">
+                  <span className="text-[#1f2937]" style={{ fontSize: 16, fontWeight: 600 }}>Document Summary</span>
+                </div>
+                <div className="data-table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Document</th>
+                        <th>Category</th>
+                        <th>Plant</th>
+                        <th>Version</th>
+                        <th>Uploaded By</th>
+                        <th>Upload Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="text-strong">{doc.name}</td>
+                        <td>{doc.category}</td>
+                        <td>{doc.plant}</td>
+                        <td>v{doc.version}</td>
+                        <td>{doc.uploadedBy}</td>
+                        <td>{doc.date || "Date unavailable"}</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </section>
 
@@ -325,27 +323,31 @@ export function DocumentDrawer({
                     </button>
                   </div>
                 ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {detailRows.map(([label, value]) => (
-                      <div key={label} className="rounded-2xl border border-[#e7edf5] bg-[#fbfcfe] px-4 py-3">
-                        <div className="text-[#718096]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                          {label}
-                        </div>
-                        <div className="mt-1 break-words text-[#1f2937]" style={{ fontSize: 14, fontWeight: 500 }}>
-                          {value}
-                        </div>
-                      </div>
-                    ))}
-                    {doc.uploadComment && (
-                      <div className="rounded-2xl border border-[#dbe7f3] bg-[#f6faff] px-4 py-4 sm:col-span-2">
-                        <div className="text-[#718096]" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                          Upload Note
-                        </div>
-                        <div className="mt-2 text-[#27415e]" style={{ fontSize: 14, lineHeight: 1.7 }}>
-                          {doc.uploadComment}
-                        </div>
-                      </div>
-                    )}
+                  <div className="data-table-panel">
+                    <div className="data-table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Field</th>
+                            <th>Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detailRows.map(([label, value]) => (
+                            <tr key={label}>
+                              <td className="text-strong">{label}</td>
+                              <td>{value}</td>
+                            </tr>
+                          ))}
+                          {doc.uploadComment && (
+                            <tr>
+                              <td className="text-strong">Upload Note</td>
+                              <td>{doc.uploadComment}</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </section>
@@ -418,36 +420,34 @@ export function DocumentDrawer({
                   )}
 
                   {comments.length > 0 ? (
-                    <div className="space-y-3">
-                      {comments.map((comment) => (
-                        <div
-                          key={comment.id}
-                          className={`rounded-2xl border px-4 py-4 ${
-                            comment.visibility === "private"
-                              ? "border-[#ecdca6] bg-[#fffaf0]"
-                              : "border-[#d8e5f4] bg-[#f7fbff]"
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <p className="flex-1 text-[#1f2937]" style={{ fontSize: 14, lineHeight: 1.65 }}>
-                              {comment.text}
-                            </p>
-                            <span
-                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 shrink-0 ${
-                                comment.visibility === "private"
-                                  ? "bg-[#f5e9c0] text-[#7a5c00]"
-                                  : "bg-[#dceeff] text-[#0A6ED1]"
-                              }`}
-                              style={{ fontSize: 11, fontWeight: 600 }}
-                            >
-                              {comment.visibility === "private" ? <><Lock size={10} /> Private</> : <><Globe size={10} /> Public</>}
-                            </span>
-                          </div>
-                          <p className="mt-2 text-[#6a7685]" style={{ fontSize: 12 }}>
-                            {comment.author} · {comment.date || "-"}
-                          </p>
-                        </div>
-                      ))}
+                    <div className="data-table-panel">
+                      <div className="data-table-scroll">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Note</th>
+                              <th>Visibility</th>
+                              <th>Author</th>
+                              <th>Date</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {comments.map((comment) => (
+                              <tr key={comment.id}>
+                                <td className="min-w-[260px]">{comment.text}</td>
+                                <td>
+                                  <span className="inline-flex items-center gap-1">
+                                    {comment.visibility === "private" ? <Lock size={10} /> : <Globe size={10} />}
+                                    {comment.visibility === "private" ? "Private" : "Public"}
+                                  </span>
+                                </td>
+                                <td>{comment.author}</td>
+                                <td>{comment.date || "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   ) : (
                     !showCommentComposer && (

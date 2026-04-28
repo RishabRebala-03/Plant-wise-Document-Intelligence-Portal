@@ -295,7 +295,7 @@ export function CeoDocuments() {
         )}
       </div>
 
-      <div className="bg-white border border-[#e8e8e8]">
+      <div className="data-table-panel">
         <div className="flex flex-wrap items-center gap-2 border-b border-[#f0f0f0] px-5 py-3">
           <span className="text-[#6a6d70]" style={{ fontSize: 12, fontWeight: 500 }}>
             Columns
@@ -321,8 +321,8 @@ export function CeoDocuments() {
             );
           })}
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full table-fixed">
+        <div className="data-table-scroll">
+          <table className="data-table table-fixed">
             <colgroup>
               {visibleColumns.map((column) => (
                 <col

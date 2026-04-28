@@ -88,12 +88,12 @@ export function AdminPanel() {
         </div>
       )}
 
-      <div className="bg-white border border-[#d9d9d9]">
+      <div className="data-table-panel">
         <div className="px-4 py-3 border-b border-[#d9d9d9]">
           <h3 className="text-[#333]" style={{ fontSize: 14, fontWeight: 500 }}>All Users</h3>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full" style={{ fontSize: 13 }}>
+        <div className="data-table-scroll">
+          <table className="data-table" style={{ fontSize: 13 }}>
             <thead>
               <tr className="bg-[#f5f5f5] text-[#6a6d70] text-left">
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Name</th>

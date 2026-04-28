@@ -204,9 +204,9 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
         )}
       </div>
 
-      <div className="bg-white border border-[#e8e8e8]">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+      <div className="data-table-panel">
+        <div className="data-table-scroll">
+          <table className="data-table">
             <colgroup>
               <col className="w-[26%]" />
               <col className="w-[20%]" />

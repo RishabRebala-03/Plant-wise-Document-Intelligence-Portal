@@ -11,6 +11,8 @@ import {
   BarChart3,
   Bell,
   Building2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Database,
   FileText,
@@ -611,13 +613,13 @@ function Breadcrumbs({ items }: { items: Array<{ label: string; to?: string }> }
 }
 
 function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUiState }) {
-  const { user, notifications, portalState } = usePortal();
+  const { user, notifications } = usePortal();
   const { can } = useRoleAccess();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState<NotificationItem[]>(notifications);
   const [clearingNotifications, setClearingNotifications] = useState(false);
   const navigate = useNavigate();
-  const isCeo = user.role === "CEO";
   const unreadNotificationCount = useMemo(
     () => notificationItems.filter((item) => !item.read).length,
     [notificationItems],
@@ -841,18 +843,20 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           </div>
         ) : null}
 
-        <aside className="hidden w-72 shrink-0 lg:block">
-          <div className="sticky top-28 space-y-4 rounded-[28px] border border-white/70 bg-white/85 p-4 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
-            <div className={`rounded-3xl p-4 text-white ${isCeo ? "bg-[linear-gradient(135deg,_#0A6ED1,_#0854A0)]" : "bg-[linear-gradient(135deg,_#354A5F,_#5B738B)]"}`}>
-              <div className="text-xs uppercase tracking-[0.24em] text-white/60">Current scope</div>
-              <div className="mt-2 text-lg font-semibold">{user.role === "CEO" ? "Enterprise view" : user.plant || "Administration"}</div>
-              <div className="mt-1 text-sm text-white/70">
-                {user.role === "Mining Manager"
-                  ? "Project creation and plant-level document control."
-                  : user.role === "Admin"
-                    ? "Governance, access, and system policy controls."
-                    : "Plant-wise analytics and executive visibility."}
-              </div>
+        <aside className={`hidden shrink-0 transition-[width] duration-200 lg:block ${sidebarCollapsed ? "w-20" : "w-72"}`}>
+          <div className="sticky top-28 space-y-2 rounded-[28px] border border-white/70 bg-white/85 p-3 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+            <div className={`flex items-center ${sidebarCollapsed ? "justify-center" : "justify-between"} px-1 pb-2`}>
+              {!sidebarCollapsed ? (
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed((current) => !current)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+              </button>
             </div>
 
             {navGroups.map((group, index) => (
@@ -863,13 +867,14 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
                     <button
                       key={item.path}
                       onClick={() => navigate(item.path)}
-                      className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm transition ${
+                      title={sidebarCollapsed ? item.label : undefined}
+                      className={`flex w-full items-center gap-3 rounded-2xl py-3 text-left text-sm transition ${
                         active ? "bg-slate-950 text-white shadow-lg" : "text-slate-600 hover:bg-slate-100"
-                      }`}
+                      } ${sidebarCollapsed ? "justify-center px-0" : "px-4"}`}
                     >
                       <item.icon size={16} />
-                      <span className="flex-1">{item.label}</span>
-                      {item.badgeCount && item.badgeCount > 0 ? (
+                      {!sidebarCollapsed ? <span className="flex-1">{item.label}</span> : null}
+                      {!sidebarCollapsed && item.badgeCount && item.badgeCount > 0 ? (
                         <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
                           active ? "bg-white/18 text-white" : "bg-[#0A6ED1] text-white"
                         }`}>
@@ -881,13 +886,6 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
                 })}
               </div>
             ))}
-
-            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-              <div className="font-semibold text-slate-900">Role restrictions</div>
-              <div className="mt-2">
-                {user.accessRule?.plantsScope || portalState.accessRules.find((rule) => rule.role === user.role)?.plantsScope || "Controlled by administrator"}
-              </div>
-            </div>
           </div>
         </aside>
 
@@ -907,7 +905,7 @@ function DashboardPage() {
 }
 
 function CeoDashboardPage() {
-  const { documents, plants, projects, users } = usePortal();
+  const { documents, plants, projects, users, user } = usePortal();
   const navigate = useNavigate();
   const plantSummary = useMemo(() => summarizeByPlant(documents), [documents]);
   const topPlants = [...plantSummary].sort((a, b) => b.documents - a.documents).slice(0, 5);
@@ -924,25 +922,40 @@ function CeoDashboardPage() {
   }, new Map<string, number>()).entries()).map(([name, value]) => ({ name, value }));
   const stalledPlants = plants.filter((plant) => !plant.lastUpload || new Date(plant.lastUpload).getTime() < Date.now() - 1000 * 60 * 60 * 24 * 14);
   const miningManagers = users.filter((item) => item.role === "Mining Manager").length;
+  const latestDocument = [...documents].sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+  const greetingName = user.firstName || user.name.split(" ")[0] || "there";
 
   return (
     <div className="space-y-6">
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0A6ED1,_#0854A0)] px-6 py-8 text-white shadow-[0_28px_80px_rgba(10,110,209,0.24)]">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-3xl">
-            <div className="text-xs uppercase tracking-[0.26em] text-white/55">CEO dashboard</div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Plant-wise visibility across projects and documents</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70">
-              The hierarchy now starts at plant level, flows into projects, and lands on dedicated document pages.
-              Executive signals below highlight document volume, dormant plants, and project concentration.
-            </p>
+            <div className="text-xs uppercase tracking-[0.26em] text-white/55">Executive dashboard</div>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Welcome back, {greetingName}</h1>
+            <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Latest upload</div>
+                <div className="mt-1 font-semibold text-white">{latestDocument ? `${latestDocument.name} · ${formatDate(latestDocument.date)}` : "No uploads recorded"}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Plants needing attention</div>
+                <div className="mt-1 font-semibold text-white">{stalledPlants.length} plant{stalledPlants.length === 1 ? "" : "s"}</div>
+              </div>
+            </div>
           </div>
           <div className="grid min-w-[260px] gap-3 rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <button onClick={() => navigate("/plants")} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
-              Open plant navigator
-            </button>
-            <button onClick={() => navigate("/documents")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm text-white transition hover:bg-white/10">
-              Review document catalog
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => navigate("/plants")} className="rounded-2xl bg-white px-4 py-3 text-left transition hover:bg-slate-100">
+                <div className="text-2xl font-semibold text-slate-950">{plants.length}</div>
+                <div className="mt-1 text-xs font-medium text-slate-500">Active plants</div>
+              </button>
+              <button onClick={() => navigate("/documents")} className="rounded-2xl bg-white px-4 py-3 text-left transition hover:bg-slate-100">
+                <div className="text-2xl font-semibold text-slate-950">{documents.length}</div>
+                <div className="mt-1 text-xs font-medium text-slate-500">Documents</div>
+              </button>
+            </div>
+            <button onClick={() => navigate("/analytics")} className="rounded-2xl border border-white/15 px-4 py-3 text-left text-sm font-semibold text-white transition hover:bg-white/10">
+              Open executive analytics
             </button>
           </div>
         </div>
@@ -990,7 +1003,7 @@ function CeoDashboardPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Document mix" subtitle="Distribution by category">
+        <SectionCard title="Document portfolio" subtitle="Category-level distribution">
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -1031,54 +1044,61 @@ function CeoDashboardPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <SectionCard title="Quick insights" subtitle="Clickable pathways into plants and project workspaces">
-          <div className="grid gap-4 md:grid-cols-2">
-            {plantSummary.slice(0, 4).map((item) => (
-              <Link
-                key={item.plantId}
-                to={`/plants/${item.plantId}`}
-                className="group rounded-3xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-[#BBD4F6] hover:bg-white"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="text-base font-semibold text-slate-900">{item.plant}</div>
-                  <Building2 size={18} className="text-slate-400 transition group-hover:text-[#0A6ED1]" />
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
-                  <div>
-                    <div className="font-semibold text-slate-900">{item.documents}</div>
-                    <div className="text-slate-500">Docs</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-900">{item.projects}</div>
-                    <div className="text-slate-500">Projects</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-900">{item.locked}</div>
-                    <div className="text-slate-500">Locked</div>
-                  </div>
-                </div>
-              </Link>
-            ))}
+        <div className="data-table-panel">
+          <div className="data-table-toolbar">
+            <h2 className="text-lg font-semibold text-slate-900">Plant Performance</h2>
           </div>
-        </SectionCard>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Plant</th>
+                  <th>Documents</th>
+                  <th>Projects</th>
+                  <th>Locked</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plantSummary.slice(0, 4).map((item) => (
+                  <tr key={item.plantId}>
+                    <td className="text-strong">{item.plant}</td>
+                    <td>{item.documents}</td>
+                    <td>{item.projects}</td>
+                    <td>{item.locked}</td>
+                    <td><Link to={`/plants/${item.plantId}`} className="font-semibold text-[#0A6ED1] hover:underline">Open</Link></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-        <SectionCard title="Executive watchlist" subtitle="Plants that need follow-up">
-          <div className="space-y-3">
-            {(stalledPlants.length ? stalledPlants : plants.slice(0, 3)).map((plant) => (
-              <div key={plant.id} className="rounded-3xl border border-[#D1E8FF] bg-[#F5FAFF] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-semibold text-slate-900">{plant.name}</div>
-                    <div className="mt-1 text-sm text-slate-600">Last upload: {formatDate(plant.lastUpload)}</div>
-                  </div>
-                  <Link to={`/plants/${plant.id}`} className="text-sm font-semibold text-[#0A6ED1] hover:text-[#0854A0]">
-                    Open
-                  </Link>
-                </div>
-              </div>
-            ))}
+        <div className="data-table-panel">
+          <div className="data-table-toolbar">
+            <h2 className="text-lg font-semibold text-slate-900">Executive Watchlist</h2>
           </div>
-        </SectionCard>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Plant</th>
+                  <th>Last Upload</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stalledPlants.length ? stalledPlants : plants.slice(0, 3)).map((plant) => (
+                  <tr key={plant.id}>
+                    <td className="text-strong">{plant.name}</td>
+                    <td>{formatDate(plant.lastUpload)}</td>
+                    <td><Link to={`/plants/${plant.id}`} className="font-semibold text-[#0A6ED1] hover:underline">Open</Link></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1100,10 +1120,20 @@ function ManagerDashboardPage() {
           <div className="max-w-3xl">
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">Manager dashboard</div>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">{user.assignedPlants?.join(", ") || user.plant || "Assigned plants"} project control</h1>
-            <p className="mt-3 text-sm leading-6 text-white/70">
-              Managers can create projects and upload within their plant scope, but document edit and delete actions are now removed.
-              Once a document is accessed, its manager view is marked as locked for the current session.
-            </p>
+            <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Projects</div>
+                <div className="mt-1 font-semibold text-white">{myProjects.length}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Documents</div>
+                <div className="mt-1 font-semibold text-white">{myDocuments.length}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Locked</div>
+                <div className="mt-1 font-semibold text-white">{lockedDocuments.length}</div>
+              </div>
+            </div>
           </div>
           <div className="grid min-w-[260px] gap-3 rounded-[28px] border border-white/10 bg-white/6 p-4">
             <button onClick={() => navigate(`/plants/${primaryPlantId(user)}`)} className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
@@ -1126,40 +1156,63 @@ function ManagerDashboardPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <SectionCard title="Project tiles" subtitle="Structured navigation from plant to project to documents">
-          <div className="grid gap-4 md:grid-cols-2">
-            {myProjects.map((project) => (
-              <Link key={project.id} to={`/plants/${project.plantId}/projects/${project.id}/documents`} className="rounded-3xl border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-300 hover:bg-white">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-base font-semibold text-slate-900">{project.name}</div>
-                  <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600">{project.code}</div>
-                </div>
-                <div className="mt-3 text-sm text-slate-600">{project.description}</div>
-                <div className="mt-4 flex items-center justify-between text-sm">
-                  <span className="text-slate-500">{statLabel(project.documentIds.length, "document")}</span>
-                  <span className="font-semibold text-blue-700">Open documents</span>
-                </div>
-              </Link>
-            ))}
+        <div className="data-table-panel">
+          <div className="data-table-toolbar">
+            <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
           </div>
-        </SectionCard>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Code</th>
+                  <th>Plant</th>
+                  <th>Documents</th>
+                  <th>Owner</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {myProjects.map((project) => (
+                  <tr key={project.id}>
+                    <td className="text-strong">{project.name}</td>
+                    <td>{project.code}</td>
+                    <td>{project.plantName}</td>
+                    <td>{project.documentIds.length}</td>
+                    <td>{project.owner}</td>
+                    <td>
+                      <Link to={`/plants/${project.plantId}/projects/${project.id}/documents`} className="font-semibold text-[#0A6ED1] hover:underline">
+                        Open
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+                {!myProjects.length ? <tr><td colSpan={6}>No projects are available.</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-        <SectionCard title="Restrictions in effect" subtitle="Current role-based guardrails">
-          <div className="space-y-3 text-sm text-slate-600">
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">No edit or delete actions</div>
-              <div className="mt-1">Manager UI keeps document metadata and lifecycle actions read-only.</div>
-            </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">Access locking after open</div>
-              <div className="mt-1">Opened records display a lock state so reviewers know the document has entered controlled read-only review.</div>
-            </div>
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">Plant-scoped navigation</div>
-              <div className="mt-1">All plant, project, and document pathways stay inside {user.assignedPlants?.join(", ") || user.plant || "your assigned plants"}.</div>
-            </div>
+        <div className="data-table-panel">
+          <div className="data-table-toolbar">
+            <h2 className="text-lg font-semibold text-slate-900">Access Controls</h2>
           </div>
-        </SectionCard>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Control</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="text-strong">Edit/Delete</td><td>Disabled for manager document records</td></tr>
+                <tr><td className="text-strong">Access Locking</td><td>{lockedDocuments.length} locked after access</td></tr>
+                <tr><td className="text-strong">Plant Scope</td><td>{user.assignedPlants?.join(", ") || user.plant || "Assigned plants"}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1171,48 +1224,57 @@ function PlantIndexPage() {
   const visiblePlants = user.role === "Mining Manager" && allowedPlantIds.length
     ? plants.filter((plant) => allowedPlantIds.includes(plant.id))
     : plants;
+  const plantRows = visiblePlants.map((plant) => ({
+    plant,
+    docCount: documents.filter((document) => document.plantId === plant.id).length,
+    projectCount: projects.filter((project) => project.plantId === plant.id).length,
+  }));
 
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Plants" }]} />
-      <section className="rounded-[32px] bg-[linear-gradient(135deg,_rgba(15,118,110,0.96),_rgba(8,47,73,0.94))] px-6 py-8 text-white shadow-[0_25px_70px_rgba(15,118,110,0.22)]">
-        <div className="text-xs uppercase tracking-[0.26em] text-white/55">Hierarchy navigator</div>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Plant → Projects → Documents</h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
-          Each tile opens the plant workspace, then project workstreams, then dedicated document list and detail pages.
-        </p>
-      </section>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {visiblePlants.map((plant) => {
-          const docCount = documents.filter((document) => document.plantId === plant.id).length;
-          const projectCount = projects.filter((project) => project.plantId === plant.id).length;
-          return (
-            <Link key={plant.id} to={`/plants/${plant.id}`} className="group rounded-[28px] border border-white/80 bg-white/90 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.07)] transition hover:-translate-y-1 hover:shadow-[0_28px_80px_rgba(15,23,42,0.12)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-lg font-semibold text-slate-900">{plant.name}</div>
-                  <div className="mt-1 text-sm text-slate-500">{plant.company}</div>
-                </div>
-                <Building2 size={20} className="text-slate-400 transition group-hover:text-teal-600" />
-              </div>
-              <div className="mt-5 grid grid-cols-3 gap-3 text-sm">
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <div className="font-semibold text-slate-900">{projectCount}</div>
-                  <div className="mt-1 text-slate-500">Projects</div>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <div className="font-semibold text-slate-900">{docCount}</div>
-                  <div className="mt-1 text-slate-500">Docs</div>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <div className="font-semibold text-slate-900">{formatDate(plant.lastUpload)}</div>
-                  <div className="mt-1 text-slate-500">Last upload</div>
-                </div>
-              </div>
-            </Link>
-          );
-        })}
+      <div className="data-table-panel">
+        <div className="data-table-toolbar flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-900">Plants</h1>
+            <div className="mt-1 text-sm text-slate-500">{plantRows.length} plant{plantRows.length === 1 ? "" : "s"} available</div>
+          </div>
+          <div className="text-sm text-slate-600">
+            {plantRows.reduce((total, row) => total + row.projectCount, 0)} projects · {plantRows.reduce((total, row) => total + row.docCount, 0)} documents
+          </div>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Plant</th>
+                <th>Company</th>
+                <th>Projects</th>
+                <th>Documents</th>
+                <th>Last Upload</th>
+                <th>Manager</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plantRows.map(({ plant, docCount, projectCount }) => (
+                <tr key={plant.id}>
+                  <td className="text-strong">{plant.name}</td>
+                  <td>{plant.company || "-"}</td>
+                  <td>{projectCount}</td>
+                  <td>{docCount}</td>
+                  <td>{formatDate(plant.lastUpload)}</td>
+                  <td>{plant.manager || "Unassigned"}</td>
+                  <td>
+                    <Link to={`/plants/${plant.id}`} className="font-semibold text-[#0A6ED1] hover:underline">
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1235,43 +1297,76 @@ function PlantProjectsPage() {
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Plants", to: "/plants" }, { label: plant.name }]} />
-      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#164e63)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.2)]">
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div>
-            <div className="text-xs uppercase tracking-[0.26em] text-white/55">Plant workspace</div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{plant.name}</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
-              Project workstreams for this plant with direct document navigation and a separate detail page per record.
-            </p>
-          </div>
+      <div className="data-table-panel">
+        <div className="data-table-toolbar flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-lg font-semibold text-slate-900">{plant.name}</h1>
           {canCreate ? (
-            <button onClick={() => navigate(`/plants/${plant.id}/projects/new`)} className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-slate-100">
+            <button onClick={() => navigate(`/plants/${plant.id}/projects/new`)} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
               Create project
             </button>
           ) : null}
         </div>
-      </section>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="Projects" value={plantProjects.length} hint="Live project spaces for this plant." icon={FolderKanban} />
-        <MetricCard label="Documents" value={plantDocuments.length} hint="Documents mapped into project workstreams." icon={FileText} tone="blue" />
-        <MetricCard label="Manager" value={plant.manager || "Unassigned"} hint="Plant owner used in project-level filters." icon={Users} tone="amber" />
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Projects</th>
+                <th>Documents</th>
+                <th>Manager</th>
+                <th>Company</th>
+                <th>Last Upload</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-strong">{plantProjects.length}</td>
+                <td>{plantDocuments.length}</td>
+                <td>{plant.manager || "Unassigned"}</td>
+                <td>{plant.company || "-"}</td>
+                <td>{formatDate(plant.lastUpload)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {plantProjects.map((project) => (
-          <Link key={project.id} to={`/plants/${plant.id}/projects/${project.id}/documents`} className="rounded-[28px] border border-white/80 bg-white/90 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.07)] transition hover:-translate-y-1 hover:border-teal-200">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-900">{project.name}</div>
-                <div className="mt-1 text-sm text-slate-500">{project.code}</div>
-              </div>
-              <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{project.documentIds.length} docs</div>
-            </div>
-            <div className="mt-4 text-sm text-slate-600">{project.description}</div>
-            <div className="mt-4 text-sm text-slate-500">Owner: {project.owner}</div>
-          </Link>
-        ))}
+      <div className="data-table-panel">
+        <div className="data-table-toolbar">
+          <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Code</th>
+                <th>Documents</th>
+                <th>Owner</th>
+                <th>Due Date</th>
+                <th>Description</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plantProjects.map((project) => (
+                <tr key={project.id}>
+                  <td className="text-strong">{project.name}</td>
+                  <td>{project.code}</td>
+                  <td>{project.documentIds.length}</td>
+                  <td>{project.owner}</td>
+                  <td>{formatDate(project.dueDate)}</td>
+                  <td className="min-w-[260px]">{project.description || "-"}</td>
+                  <td>
+                    <Link to={`/plants/${plant.id}/projects/${project.id}/documents`} className="font-semibold text-[#0A6ED1] hover:underline">
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+              {!plantProjects.length ? <tr><td colSpan={7}>No projects are registered for this plant.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1753,9 +1848,20 @@ function DocumentDetailPage() {
           <div className="max-w-3xl">
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">Document detail page</div>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">{document.name}</h1>
-            <p className="mt-3 text-sm leading-6 text-white/72">
-              This dedicated detail page keeps metadata, notes, and file access separate from the document listing view.
-            </p>
+            <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Category</div>
+                <div className="mt-1 font-semibold text-white">{document.category}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Plant</div>
+                <div className="mt-1 font-semibold text-white">{document.plant}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Version</div>
+                <div className="mt-1 font-semibold text-white">v{document.version}</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -2210,37 +2316,64 @@ function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Analytics" }]} />
-      <section className="rounded-[32px] bg-[linear-gradient(135deg,_#111827,_#0f766e)] px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
-        <div className="text-xs uppercase tracking-[0.26em] text-white/55">Executive briefing and analytics</div>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Executive intelligence cockpit</h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
-          Briefing mode translates document activity, plant momentum, and trust posture into a single decision surface for the executive view.
-        </p>
-      </section>
+      <div className="data-table-panel">
+        <div className="data-table-toolbar">
+          <h1 className="text-lg font-semibold text-slate-900">Analytics</h1>
+        </div>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Upload Trend</th>
+                <th>Top Plant</th>
+                <th>Leading Category</th>
+                <th>Locked Records</th>
+                <th>Trust Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-strong">{timelineHighlights.growth >= 0 ? "+" : ""}{timelineHighlights.growth}%</td>
+                <td>{timelineHighlights.mostDocumentedPlant?.plant || "-"}</td>
+                <td>{timelineHighlights.busiestCategory?.name || "-"}</td>
+                <td>{timelineHighlights.totalLocked}</td>
+                <td>{trustScore}/100</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
-        <SectionCard title="Executive briefing mode" subtitle="A fast, high-signal read on what changed and what matters next">
-          <div className="grid gap-4 md:grid-cols-3">
-            {briefingCards.map((card) => (
-              <button
-                key={card.title}
-                type="button"
-                onClick={() => navigate(card.action)}
-                className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff,#f8fafc)] p-5 text-left transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-[0_20px_40px_rgba(15,23,42,0.08)]"
-              >
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-400">{card.title}</div>
-                <div className="mt-3 text-sm leading-6 text-slate-700">{card.detail}</div>
-                <div className="mt-4 text-sm font-semibold text-[#0A6ED1]">{card.label}</div>
-              </button>
-            ))}
+        <div className="data-table-panel">
+          <div className="data-table-toolbar">
+            <h2 className="text-lg font-semibold text-slate-900">Executive Briefing</h2>
           </div>
-          <div className="mt-5 rounded-[28px] border border-slate-200 bg-slate-50 p-5">
-            <div className="text-sm font-semibold text-slate-900">This briefing in one sentence</div>
-            <div className="mt-2 text-sm leading-7 text-slate-600">
-              Document activity is {timelineHighlights.growth >= 0 ? "accelerating" : "slowing"} at {`${timelineHighlights.growth >= 0 ? "+" : ""}${timelineHighlights.growth}%`} month over month, {timelineHighlights.mostDocumentedPlant?.plant || "the network"} leads current volume, and the trust posture is holding at {trustScore}/100.
-            </div>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Signal</th>
+                  <th>Detail</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {briefingCards.map((card) => (
+                  <tr key={card.title}>
+                    <td className="text-strong">{card.title}</td>
+                    <td className="min-w-[360px]">{card.detail}</td>
+                    <td>
+                      <button type="button" onClick={() => navigate(card.action)} className="font-semibold text-[#0A6ED1] hover:underline">
+                        {card.label}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </SectionCard>
+        </div>
 
         <SectionCard title="Trust and security layer" subtitle="Live confidence score across identity, network, session, and document controls">
           <div className="rounded-[32px] bg-[linear-gradient(135deg,#0f172a,#1e293b)] p-6 text-white">
@@ -2253,19 +2386,27 @@ function AnalyticsPage() {
               <div className="h-full rounded-full bg-[linear-gradient(90deg,#22c55e,#38bdf8)]" style={{ width: `${trustScore}%` }} />
             </div>
           </div>
-          <div className="mt-4 space-y-3">
-            {trustPillars.map((pillar) => (
-              <div key={pillar.label} className="rounded-3xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-900">{pillar.label}</div>
-                  <div className="text-sm font-semibold text-slate-900">{pillar.value}/100</div>
-                </div>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full rounded-full bg-[#0A6ED1]" style={{ width: `${pillar.value}%` }} />
-                </div>
-                <div className="mt-2 text-sm text-slate-500">{pillar.detail}</div>
-              </div>
-            ))}
+          <div className="mt-4 data-table-panel">
+            <div className="data-table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Control Area</th>
+                    <th>Score</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trustPillars.map((pillar) => (
+                    <tr key={pillar.label}>
+                      <td className="text-strong">{pillar.label}</td>
+                      <td>{pillar.value}/100</td>
+                      <td className="min-w-[260px]">{pillar.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </SectionCard>
       </div>
@@ -2277,29 +2418,41 @@ function AnalyticsPage() {
         <MetricCard label="Locked records" value={timelineHighlights.totalLocked} hint="Manager-opened records in controlled state." icon={Lock} tone="rose" onClick={() => navigate("/activity-logs")} />
       </div>
 
-      <SectionCard title="Executive analytics signal wall" subtitle="A more visual plant-by-plant read on intensity, governance load, and project spread">
-        <div className="grid gap-4 lg:grid-cols-4">
-          {signalWall.map((item) => (
-            <button
-              key={item.plantId}
-              type="button"
-              onClick={() => navigate(`/plants/${item.plantId}`)}
-              className={`rounded-[30px] border border-white/80 bg-gradient-to-br ${item.tone} p-5 text-left shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_24px_60px_rgba(15,23,42,0.12)]`}
-            >
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Plant signal</div>
-              <div className="mt-3 text-xl font-semibold text-slate-950">{item.plant}</div>
-              <div className="mt-4 grid gap-2 text-sm text-slate-600">
-                <div>{item.documents} documents</div>
-                <div>{item.projects} projects</div>
-                <div>{item.locked} controlled records</div>
-              </div>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/70">
-                <div className="h-full rounded-full bg-slate-900" style={{ width: `${item.intensity}%` }} />
-              </div>
-            </button>
-          ))}
+      <div className="data-table-panel">
+        <div className="data-table-toolbar">
+          <h2 className="text-lg font-semibold text-slate-900">Plant Signals</h2>
         </div>
-      </SectionCard>
+        <div className="data-table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Plant</th>
+                <th>Documents</th>
+                <th>Projects</th>
+                <th>Controlled Records</th>
+                <th>Intensity</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {signalWall.map((item) => (
+                <tr key={item.plantId}>
+                  <td className="text-strong">{item.plant}</td>
+                  <td>{item.documents}</td>
+                  <td>{item.projects}</td>
+                  <td>{item.locked}</td>
+                  <td>{item.intensity}%</td>
+                  <td>
+                    <button type="button" onClick={() => navigate(`/plants/${item.plantId}`)} className="font-semibold text-[#0A6ED1] hover:underline">
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionCard title="Monthly uploads and controlled access" subtitle="Line chart with overlay for locked records">
@@ -2318,7 +2471,7 @@ function AnalyticsPage() {
           </button>
         </SectionCard>
 
-        <SectionCard title="Category distribution" subtitle="Pie view of document mix">
+        <SectionCard title="Category distribution" subtitle="Portfolio view by document category">
           <div className="h-96 rounded-3xl transition hover:bg-slate-50">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -2646,9 +2799,20 @@ function AdminDashboardPage() {
           <div className="max-w-3xl">
             <div className="text-xs uppercase tracking-[0.26em] text-white/55">Admin command center</div>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Governance analytics for identity, network policy, and platform controls</h1>
-            <p className="mt-3 text-sm leading-6 text-white/72">
-              This view is purpose-built for administration: less executive storytelling, more control coverage, risk posture, and direct drill-downs into enforceable settings.
-            </p>
+            <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Users</div>
+                <div className="mt-1 font-semibold text-white">{users.length}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">IP Rules</div>
+                <div className="mt-1 font-semibold text-white">{portalState.ipRules.length}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+                <div className="text-white/55">Session Mode</div>
+                <div className="mt-1 font-semibold text-white">{portalState.sessionPolicy.conflictMode}</div>
+              </div>
+            </div>
           </div>
           <div className="grid min-w-[280px] gap-3 rounded-[28px] border border-white/10 bg-black/10 p-4 backdrop-blur">
             {can("canManageUsers") ? (
@@ -2716,7 +2880,7 @@ function AdminDashboardPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <SectionCard title="Role mix" subtitle="Pie chart of who holds operational authority">
+        <SectionCard title="Role distribution" subtitle="Authority profile by account type">
           <button
             type="button"
             onClick={() => navigate("/admin/users")}
@@ -3134,9 +3298,12 @@ function AdminMasterDataPage() {
         <div className="max-w-4xl">
           <div className="text-xs uppercase tracking-[0.26em] text-white/55">Master data control room</div>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Create and govern the platform’s foundational records</h1>
-          <p className="mt-3 text-sm leading-6 text-white/72">
-            Admin can create users, plants, and projects here, then manage documents from a plant-wise view without jumping across multiple admin screens.
-          </p>
+          <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3"><div className="text-white/55">Users</div><div className="mt-1 font-semibold text-white">{users.length}</div></div>
+            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3"><div className="text-white/55">Plants</div><div className="mt-1 font-semibold text-white">{plants.length}</div></div>
+            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3"><div className="text-white/55">Projects</div><div className="mt-1 font-semibold text-white">{loadingProjects ? "..." : projects.length}</div></div>
+            <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3"><div className="text-white/55">Documents</div><div className="mt-1 font-semibold text-white">{documents.length}</div></div>
+          </div>
         </div>
       </section>
 
@@ -4513,9 +4680,20 @@ function ActivityLogsPage() {
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#334155)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.22)]">
         <div className="text-xs uppercase tracking-[0.26em] text-white/55">Security and audit visibility</div>
         <h1 className="mt-3 text-4xl font-semibold tracking-tight">Platform activity logs</h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-white/72">
-          Login-adjacent actions, document events, and user-driven activity are centralized here for executive and administrative review.
-        </p>
+        <div className="mt-4 grid gap-3 text-sm text-white/78 sm:grid-cols-3">
+          <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+            <div className="text-white/55">Events</div>
+            <div className="mt-1 font-semibold text-white">{activities.length}</div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+            <div className="text-white/55">User</div>
+            <div className="mt-1 font-semibold text-white">{formatRole(user.role)}</div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
+            <div className="text-white/55">Status</div>
+            <div className="mt-1 font-semibold text-white">{loading ? "Loading" : error ? "Error" : "Ready"}</div>
+          </div>
+        </div>
       </section>
 
       {loading ? <SectionCard title="Loading logs"><div className="text-sm text-slate-500">Fetching the latest activity stream...</div></SectionCard> : null}
