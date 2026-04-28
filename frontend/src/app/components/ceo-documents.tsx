@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import {
-  Filter, Download, Eye, MessageSquare,
-  Lock, Globe, SlidersHorizontal, X, ChevronDown, RefreshCw, ChevronLeft, ChevronRight,
+  Download, Eye, MessageSquare,
+  Lock, Globe, SlidersHorizontal, X, RefreshCw, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
+import { ValueHelp } from "./ui/value-help";
 
 type DocumentColumnId = "name" | "plant" | "category" | "uploadedBy" | "date" | "notes" | "actions";
 
@@ -152,8 +153,26 @@ export function CeoDocuments() {
         new Set(
           documents.flatMap((document) => [document.name, document.uploadedBy]).filter((value) => value.trim()),
         ),
-      ).sort((a, b) => a.localeCompare(b)),
+      )
+        .sort((a, b) => a.localeCompare(b))
+        .map((option) => ({ value: option, label: option, meta: "Document or uploader" })),
     [documents],
+  );
+  const plantValueHelpOptions = useMemo(
+    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    [plants],
+  );
+  const categoryValueHelpOptions = useMemo(
+    () => categoryOptions.map((category) => ({ value: category, label: category, meta: "Category" })),
+    [],
+  );
+  const sortValueHelpOptions = useMemo(
+    () => [
+      { value: "date", label: "Sort: Latest First", meta: "Newest documents first" },
+      { value: "name", label: "Sort: Name A-Z", meta: "Alphabetical by document name" },
+      { value: "plant", label: "Sort: Plant", meta: "Grouped by plant name" },
+    ],
+    [],
   );
 
   const visibleDocuments = useMemo(() => documents, [documents]);
@@ -224,65 +243,49 @@ export function CeoDocuments() {
       </div>
 
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-xs">
-          <select
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="">All documents and uploaders</option>
-            {searchOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="All documents and uploaders"
+          emptyLabel="No matching documents or uploaders."
+          options={searchOptions}
+          value={search}
+          onChange={setSearch}
+          containerClassName="min-w-[200px] max-w-xs flex-1"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
-        <div className="relative">
-          <Filter size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#999]" />
-          <select
-            value={filterPlant}
-            onChange={(e) => setFilterPlant(e.target.value)}
-            className="h-9 pl-8 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="">All Plants</option>
-            {plants.map((plant) => (
-              <option key={plant.id} value={plant.id}>{plant.name}</option>
-            ))}
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="All plants"
+          emptyLabel="No matching plants."
+          options={plantValueHelpOptions}
+          value={filterPlant}
+          onChange={setFilterPlant}
+          containerClassName="min-w-[180px]"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
-        <div className="relative">
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="">All Categories</option>
-            {categoryOptions.map((category) => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="All categories"
+          emptyLabel="No matching categories."
+          options={categoryValueHelpOptions}
+          value={filterCategory}
+          onChange={setFilterCategory}
+          containerClassName="min-w-[180px]"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
-        <div className="relative ml-auto">
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as "date" | "name" | "plant")}
-            className="h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="date">Sort: Latest First</option>
-            <option value="name">Sort: Name A-Z</option>
-            <option value="plant">Sort: Plant</option>
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="Sort: Latest First"
+          emptyLabel="No matching sort modes."
+          options={sortValueHelpOptions}
+          value={sortBy}
+          onChange={(value) => setSortBy(value as "date" | "name" | "plant")}
+          containerClassName="min-w-[210px] ml-auto"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
         {hasFilter && (
           <button

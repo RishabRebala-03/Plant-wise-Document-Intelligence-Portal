@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { Clock3, Download, Eye, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
+import { Clock3, Download, FileSpreadsheet, X } from "lucide-react";
 import type { Activity } from "../lib/types";
+import { ValueHelp, type ValueHelpOption } from "./ui/value-help";
 
 interface DetailedActivityLogProps {
   activities: Activity[];
@@ -210,23 +211,147 @@ function escapeHtml(value: string) {
 export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
   const [focusFilter, setFocusFilter] = useState("");
   const [actionFilter, setActionFilter] = useState("");
+  const [actorFilter, setActorFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [plantFilter, setPlantFilter] = useState("");
+  const [recordFilter, setRecordFilter] = useState("");
+  const [entityFilter, setEntityFilter] = useState("");
+  const [ipFilter, setIpFilter] = useState("");
+  const [sessionFilter, setSessionFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+  const [sortOrder, setSortOrder] = useState("time-desc");
 
-  const focusOptions = useMemo(
+  const focusOptions = useMemo(() => {
+    const registry = new Map<string, ValueHelpOption>();
+    activities.forEach((activity) => {
+      const actor = (activity.userName || "").trim();
+      const record = (activity.documentName || "").trim();
+      const plant = String(activity.metadata?.plantName || "").trim();
+
+      if (actor) {
+        registry.set(`actor:${actor}`, {
+          value: actor,
+          label: actor,
+          meta: "Actor",
+        });
+      }
+      if (record) {
+        registry.set(`record:${record}`, {
+          value: record,
+          label: record,
+          meta: "Document or record",
+        });
+      }
+      if (plant) {
+        registry.set(`plant:${plant}`, {
+          value: plant,
+          label: plant,
+          meta: "Business unit",
+        });
+      }
+    });
+
+    return Array.from(registry.values()).sort((a, b) => {
+      if (a.label === b.label) return (a.meta || "").localeCompare(b.meta || "");
+      return a.label.localeCompare(b.label);
+    });
+  }, [activities]);
+
+  const actionOptions = useMemo(
     () =>
       Array.from(
         new Set(
-          activities.flatMap((activity) => [
-            activity.userName || "",
-            activity.documentName || "",
-            String(activity.metadata?.plantName || ""),
-          ]).filter((value) => value.trim()),
+          activities
+            .map((activity) => activity.action?.trim())
+            .filter((value): value is string => Boolean(value)),
         ),
-      ).sort((a, b) => a.localeCompare(b)),
+      )
+        .sort((a, b) => a.localeCompare(b))
+        .map((action) => ({
+          value: action.toLowerCase(),
+          label: action,
+          meta: "Activity type",
+        })),
     [activities],
+  );
+  const actorOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => (activity.userName || activity.userId || "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Actor" })),
+    [activities],
+  );
+  const roleOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => formatRole(activity.metadata?.userRole || activity.metadata?.user_role || activity.metadata?.role)).filter((value) => value !== "Not available")))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Actor role" })),
+    [activities],
+  );
+  const plantOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => String(activity.metadata?.plantName || activity.metadata?.plantId || "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Business unit" })),
+    [activities],
+  );
+  const recordOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => (activity.documentName || activity.entityId || "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Document or record" })),
+    [activities],
+  );
+  const entityOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => formatEntityType(activity.entityType)).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Record type" })),
+    [activities],
+  );
+  const ipOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => String(activity.metadata?.clientIp || "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "IP address" })),
+    [activities],
+  );
+  const sessionOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => String(activity.metadata?.sessionId || "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value, meta: "Session ID" })),
+    [activities],
+  );
+  const dateOptions = useMemo(
+    () =>
+      Array.from(new Set(activities.map((activity) => activity.createdAt?.slice(0, 10)).filter((value): value is string => Boolean(value))))
+        .sort((a, b) => b.localeCompare(a))
+        .map((value) => ({ value, label: formatDate(value), meta: value })),
+    [activities],
+  );
+  const sortOptions = useMemo(
+    () => [
+      { value: "time-desc", label: "Latest event first", meta: "Sort" },
+      { value: "time-asc", label: "Oldest event first", meta: "Sort" },
+      { value: "actor-asc", label: "Actor A-Z", meta: "Sort" },
+      { value: "action-asc", label: "Activity type A-Z", meta: "Sort" },
+      { value: "record-asc", label: "Record A-Z", meta: "Sort" },
+      { value: "plant-asc", label: "Business unit A-Z", meta: "Sort" },
+    ],
+    [],
   );
 
   const filtered = useMemo(() => {
     return activities.filter((activity) => {
+      const actor = activity.userName || activity.userId || "";
+      const role = formatRole(activity.metadata?.userRole || activity.metadata?.user_role || activity.metadata?.role);
+      const plant = String(activity.metadata?.plantName || activity.metadata?.plantId || "");
+      const record = activity.documentName || activity.entityId || "";
+      const entity = formatEntityType(activity.entityType);
+      const ip = String(activity.metadata?.clientIp || "");
+      const sessionId = String(activity.metadata?.sessionId || "");
+      const activityDate = activity.createdAt?.slice(0, 10) || "";
       const matchesFocus =
         !focusFilter ||
         activity.action === focusFilter ||
@@ -237,19 +362,55 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
         !actionFilter ||
         activity.action.toLowerCase() === actionFilter ||
         activity.action.toLowerCase().includes(actionFilter);
-      return matchesFocus && matchesAction;
+      const matchesActor = !actorFilter || actor === actorFilter;
+      const matchesRole = !roleFilter || role === roleFilter;
+      const matchesPlant = !plantFilter || plant === plantFilter;
+      const matchesRecord = !recordFilter || record === recordFilter;
+      const matchesEntity = !entityFilter || entity === entityFilter;
+      const matchesIp = !ipFilter || ip === ipFilter;
+      const matchesSession = !sessionFilter || sessionId === sessionFilter;
+      const matchesDate = !dateFilter || activityDate === dateFilter;
+      return matchesFocus && matchesAction && matchesActor && matchesRole && matchesPlant && matchesRecord && matchesEntity && matchesIp && matchesSession && matchesDate;
     });
-  }, [activities, actionFilter, focusFilter]);
+  }, [activities, actionFilter, actorFilter, dateFilter, entityFilter, focusFilter, ipFilter, plantFilter, recordFilter, roleFilter, sessionFilter]);
+
+  const sorted = useMemo(() => {
+    const next = [...filtered];
+    next.sort((left, right) => {
+      const leftActor = left.userName || left.userId || "";
+      const rightActor = right.userName || right.userId || "";
+      const leftRecord = left.documentName || left.entityId || "";
+      const rightRecord = right.documentName || right.entityId || "";
+      const leftPlant = String(left.metadata?.plantName || left.metadata?.plantId || "");
+      const rightPlant = String(right.metadata?.plantName || right.metadata?.plantId || "");
+      switch (sortOrder) {
+        case "time-asc":
+          return (left.createdAt || "").localeCompare(right.createdAt || "") || left.id.localeCompare(right.id);
+        case "actor-asc":
+          return leftActor.localeCompare(rightActor) || left.id.localeCompare(right.id);
+        case "action-asc":
+          return left.action.localeCompare(right.action) || left.id.localeCompare(right.id);
+        case "record-asc":
+          return leftRecord.localeCompare(rightRecord) || left.id.localeCompare(right.id);
+        case "plant-asc":
+          return leftPlant.localeCompare(rightPlant) || left.id.localeCompare(right.id);
+        case "time-desc":
+        default:
+          return (right.createdAt || "").localeCompare(left.createdAt || "") || left.id.localeCompare(right.id);
+      }
+    });
+    return next;
+  }, [filtered, sortOrder]);
 
   const grouped = useMemo(() => {
     const today = new Date().toDateString();
-    const todayItems = filtered.filter((item) => item.createdAt && new Date(item.createdAt).toDateString() === today);
-    const earlierItems = filtered.filter((item) => !item.createdAt || new Date(item.createdAt).toDateString() !== today);
+    const todayItems = sorted.filter((item) => item.createdAt && new Date(item.createdAt).toDateString() === today);
+    const earlierItems = sorted.filter((item) => !item.createdAt || new Date(item.createdAt).toDateString() !== today);
     return [
       ...(todayItems.length ? [{ title: "Today", items: todayItems }] : []),
       ...(earlierItems.length ? [{ title: "Earlier", items: earlierItems }] : []),
     ];
-  }, [filtered]);
+  }, [sorted]);
 
   const counts = useMemo(() => {
     return {
@@ -384,55 +545,59 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
         </div>
       </div>
 
-      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-[28px] border border-white/70 bg-white/90 px-5 py-4 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur">
-        <select
+      <div className="mb-5 grid gap-4 rounded-[28px] border border-white/70 bg-white/90 px-5 py-4 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur md:grid-cols-2 xl:grid-cols-5">
+        <ValueHelp
+          label="Focus"
+          placeholder="All actors and records"
+          emptyLabel="No matching actors, records, or business units."
+          options={focusOptions}
           value={focusFilter}
-          onChange={(e) => setFocusFilter(e.target.value)}
-          className="h-11 min-w-[240px] max-w-sm flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-teal-500"
-        >
-          <option value="">All actors and records</option>
-          {focusOptions.map((option) => (
-            <option key={option} value={option}>{option}</option>
-          ))}
-        </select>
+          onChange={setFocusFilter}
+          containerClassName="min-w-[260px] flex-1"
+        />
 
-        {[
-          { key: "", label: "All Types" },
-          { key: "uploaded", label: "Uploads" },
-          { key: "viewed", label: "Views" },
-          { key: "downloaded", label: "Downloads" },
-          { key: "updated", label: "Updates" },
-          { key: "commented", label: "Comments" },
-          { key: "deleted", label: "Deleted" },
-        ].map((chip) => (
-          <button
-            key={chip.label}
-            type="button"
-            onClick={() => setActionFilter(actionFilter === chip.key ? "" : chip.key)}
-            className={`h-10 rounded-2xl border px-4 text-sm font-medium transition ${
-              actionFilter === chip.key
-                ? "border-teal-300 bg-teal-50 text-teal-700"
-                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            {chip.label}
-          </button>
-        ))}
+        <ValueHelp
+          label="Activity Type"
+          placeholder="All activity types"
+          emptyLabel="No matching activity types."
+          options={actionOptions}
+          value={actionFilter}
+          onChange={setActionFilter}
+          containerClassName="w-full"
+        />
+        <ValueHelp label="Actor" placeholder="All actors" emptyLabel="No matching actors." options={actorOptions} value={actorFilter} onChange={setActorFilter} containerClassName="w-full" />
+        <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={roleOptions} value={roleFilter} onChange={setRoleFilter} containerClassName="w-full" />
+        <ValueHelp label="Business Unit" placeholder="All plants" emptyLabel="No matching plants." options={plantOptions} value={plantFilter} onChange={setPlantFilter} containerClassName="w-full" />
+        <ValueHelp label="Record" placeholder="All records" emptyLabel="No matching records." options={recordOptions} value={recordFilter} onChange={setRecordFilter} containerClassName="w-full" />
+        <ValueHelp label="Record Type" placeholder="All record types" emptyLabel="No matching record types." options={entityOptions} value={entityFilter} onChange={setEntityFilter} containerClassName="w-full" />
+        <ValueHelp label="IP Address" placeholder="All IPs" emptyLabel="No matching IPs." options={ipOptions} value={ipFilter} onChange={setIpFilter} containerClassName="w-full" />
+        <ValueHelp label="Session" placeholder="All sessions" emptyLabel="No matching sessions." options={sessionOptions} value={sessionFilter} onChange={setSessionFilter} containerClassName="w-full" />
+        <ValueHelp label="Date" placeholder="All dates" emptyLabel="No matching dates." options={dateOptions} value={dateFilter} onChange={setDateFilter} containerClassName="w-full" />
+        <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={sortOptions} value={sortOrder} onChange={setSortOrder} containerClassName="w-full" clearLabel="Latest event first" clearDescription="Reset to the default sort order" />
 
-        {(focusFilter || actionFilter) && (
+        {(focusFilter || actionFilter || actorFilter || roleFilter || plantFilter || recordFilter || entityFilter || ipFilter || sessionFilter || dateFilter) && (
           <button
             type="button"
             onClick={() => {
               setFocusFilter("");
               setActionFilter("");
+              setActorFilter("");
+              setRoleFilter("");
+              setPlantFilter("");
+              setRecordFilter("");
+              setEntityFilter("");
+              setIpFilter("");
+              setSessionFilter("");
+              setDateFilter("");
+              setSortOrder("time-desc");
             }}
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-rose-200 px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50 xl:col-span-2"
           >
             <X size={14} /> Clear
           </button>
         )}
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 xl:col-span-2 xl:justify-end">
           <button
             type="button"
             onClick={exportCsv}

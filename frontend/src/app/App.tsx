@@ -75,6 +75,7 @@ import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { DocumentDrawer } from "./components/document-drawer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
+import { ValueHelp, type ValueHelpOption } from "./components/ui/value-help";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
 import {
@@ -206,6 +207,39 @@ function formatDate(value?: string | null) {
 
 function formatBusinessHour(value: number) {
   return GOVERNANCE_TIME_OPTIONS.find((option) => option.value === value)?.label || `${value}:00`;
+}
+
+function normalizeSearchValue(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase();
+}
+
+function matchesValueHelpFilter(selected: string, ...candidates: Array<string | null | undefined>) {
+  if (!selected) return true;
+  return candidates.some((candidate) => candidate === selected);
+}
+
+function matchesTextFilter(selected: string, ...candidates: Array<string | null | undefined>) {
+  if (!selected) return true;
+  const query = normalizeSearchValue(selected);
+  return candidates.some((candidate) => normalizeSearchValue(candidate).includes(query));
+}
+
+function buildValueHelpOptions(values: Array<string | null | undefined>, meta: string) {
+  return Array.from(new Set(values.map((value) => (value || "").trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ value, label: value, meta }));
+}
+
+function compareText(a?: string | null, b?: string | null) {
+  return (a || "").localeCompare(b || "");
+}
+
+function compareNumber(a?: number | null, b?: number | null) {
+  return (a || 0) - (b || 0);
+}
+
+function compareDateValue(a?: string | null, b?: string | null) {
+  return (a || "").localeCompare(b || "");
 }
 
 function normalizeGovernancePolicy(policy: GovernancePolicy): GovernancePolicy {
@@ -722,13 +756,6 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
           </div>
 
           <div className="flex items-center gap-3">
-            <div className={`rounded-full px-3 py-1 text-xs font-medium ${session.conflictDetected ? "bg-[#BB0000]/20 text-white" : session.warningOpen ? "bg-[#D1E8FF]/20 text-[#D1E8FF]" : "bg-white/10 text-white/80"}`}>
-              {session.conflictDetected
-                ? "Session conflict detected"
-                : session.warningOpen
-                  ? `Auto logout in ${session.secondsRemaining}s`
-                  : `Auto logout in ${Math.max(1, Math.floor(session.secondsRemaining / 60))}m`}
-            </div>
 
             <div className="relative">
               <button
@@ -1221,14 +1248,103 @@ function ManagerDashboardPage() {
 function PlantIndexPage() {
   const { user, plants, documents, projects } = usePortal();
   const allowedPlantIds = assignedPlantIds(user);
+  const [plantQuery, setPlantQuery] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
+  const [managerFilter, setManagerFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [activityFilter, setActivityFilter] = useState("");
+  const [plantSort, setPlantSort] = useState("name-asc");
   const visiblePlants = user.role === "Mining Manager" && allowedPlantIds.length
     ? plants.filter((plant) => allowedPlantIds.includes(plant.id))
     : plants;
-  const plantRows = visiblePlants.map((plant) => ({
-    plant,
-    docCount: documents.filter((document) => document.plantId === plant.id).length,
-    projectCount: projects.filter((project) => project.plantId === plant.id).length,
-  }));
+  const plantRows = useMemo(
+    () =>
+      visiblePlants.map((plant) => {
+        const docCount = documents.filter((document) => document.plantId === plant.id).length;
+        const projectCount = projects.filter((project) => project.plantId === plant.id).length;
+        const activityBand = docCount >= 10 ? "High activity" : docCount >= 4 ? "Medium activity" : docCount > 0 ? "Low activity" : "No documents";
+        return {
+          plant,
+          docCount,
+          projectCount,
+          activityBand,
+        };
+      }),
+    [documents, projects, visiblePlants],
+  );
+  const plantQueryOptions = useMemo(
+    () => {
+      const registry = new Map<string, ValueHelpOption>();
+      plantRows.forEach(({ plant }) => {
+        [plant.name, plant.plant, plant.plantName, plant.plantName2, plant.company, plant.manager, plant.location, plant.address].forEach((value, index) => {
+          if (!value) return;
+          const meta = ["Plant", "Plant code", "Plant name", "Plant name 2", "Company", "Manager", "Location", "Address"][index];
+          registry.set(`${meta}:${value}`, { value, label: value, meta });
+        });
+      });
+      return Array.from(registry.values()).sort((a, b) => a.label.localeCompare(b.label) || (a.meta || "").localeCompare(b.meta || ""));
+    },
+    [plantRows],
+  );
+  const companyOptions = useMemo(() => buildValueHelpOptions(plantRows.map((row) => row.plant.company), "Company"), [plantRows]);
+  const managerOptions = useMemo(() => buildValueHelpOptions(plantRows.map((row) => row.plant.manager), "Manager"), [plantRows]);
+  const statusOptions = useMemo(() => buildValueHelpOptions(plantRows.map((row) => row.plant.status), "Status"), [plantRows]);
+  const activityOptions = useMemo(() => buildValueHelpOptions(plantRows.map((row) => row.activityBand), "Activity"), [plantRows]);
+  const plantSortOptions = useMemo(
+    () => [
+      { value: "name-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "company-asc", label: "Company A-Z", meta: "Sort" },
+      { value: "manager-asc", label: "Manager A-Z", meta: "Sort" },
+      { value: "documents-desc", label: "Documents high-low", meta: "Sort" },
+      { value: "projects-desc", label: "Projects high-low", meta: "Sort" },
+      { value: "last-upload-desc", label: "Latest upload first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredPlantRows = useMemo(
+    () =>
+      plantRows.filter(({ plant, activityBand }) => {
+        const matchesQuery = !plantQuery || [
+          plant.name,
+          plant.plant,
+          plant.plantName,
+          plant.plantName2,
+          plant.company,
+          plant.manager,
+          plant.location,
+          plant.address,
+        ].some((value) => normalizeSearchValue(value).includes(normalizeSearchValue(plantQuery)));
+        return (
+          matchesQuery &&
+          matchesValueHelpFilter(companyFilter, plant.company) &&
+          matchesValueHelpFilter(managerFilter, plant.manager) &&
+          matchesValueHelpFilter(statusFilter, plant.status) &&
+          matchesValueHelpFilter(activityFilter, activityBand)
+        );
+      }),
+    [activityFilter, companyFilter, managerFilter, plantQuery, plantRows, statusFilter],
+  );
+  const sortedPlantRows = useMemo(() => {
+    const next = [...filteredPlantRows];
+    next.sort((left, right) => {
+      switch (plantSort) {
+        case "company-asc":
+          return compareText(left.plant.company, right.plant.company) || compareText(left.plant.name, right.plant.name);
+        case "manager-asc":
+          return compareText(left.plant.manager, right.plant.manager) || compareText(left.plant.name, right.plant.name);
+        case "documents-desc":
+          return compareNumber(right.docCount, left.docCount) || compareText(left.plant.name, right.plant.name);
+        case "projects-desc":
+          return compareNumber(right.projectCount, left.projectCount) || compareText(left.plant.name, right.plant.name);
+        case "last-upload-desc":
+          return compareDateValue(right.plant.lastUpload, left.plant.lastUpload) || compareText(left.plant.name, right.plant.name);
+        case "name-asc":
+        default:
+          return compareText(left.plant.name, right.plant.name);
+      }
+    });
+    return next;
+  }, [filteredPlantRows, plantSort]);
 
   return (
     <div className="space-y-6">
@@ -1240,7 +1356,83 @@ function PlantIndexPage() {
             <div className="mt-1 text-sm text-slate-500">{plantRows.length} plant{plantRows.length === 1 ? "" : "s"} available</div>
           </div>
           <div className="text-sm text-slate-600">
-            {plantRows.reduce((total, row) => total + row.projectCount, 0)} projects · {plantRows.reduce((total, row) => total + row.docCount, 0)} documents
+            {filteredPlantRows.reduce((total, row) => total + row.projectCount, 0)} projects · {filteredPlantRows.reduce((total, row) => total + row.docCount, 0)} documents
+          </div>
+        </div>
+        <div className="grid gap-4 border-b border-slate-200 bg-slate-50/80 px-4 py-4 md:grid-cols-2 xl:grid-cols-6">
+          <ValueHelp
+            label="Search"
+            placeholder="Plant, manager, company..."
+            emptyLabel="No matching plant terms."
+            options={plantQueryOptions}
+            value={plantQuery}
+            onChange={setPlantQuery}
+            containerClassName="w-full"
+          />
+          <ValueHelp
+            label="Company"
+            placeholder="All companies"
+            emptyLabel="No matching companies."
+            options={companyOptions}
+            value={companyFilter}
+            onChange={setCompanyFilter}
+            containerClassName="w-full"
+          />
+          <ValueHelp
+            label="Manager"
+            placeholder="All managers"
+            emptyLabel="No matching managers."
+            options={managerOptions}
+            value={managerFilter}
+            onChange={setManagerFilter}
+            containerClassName="w-full"
+          />
+          <ValueHelp
+            label="Status"
+            placeholder="All statuses"
+            emptyLabel="No matching statuses."
+            options={statusOptions}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            containerClassName="w-full"
+          />
+          <div className="flex items-end gap-3">
+            <ValueHelp
+              label="Activity"
+              placeholder="All activity bands"
+              emptyLabel="No matching activity bands."
+              options={activityOptions}
+              value={activityFilter}
+              onChange={setActivityFilter}
+              containerClassName="w-full"
+            />
+          </div>
+          <div className="flex items-end gap-3">
+            <ValueHelp
+              label="Sort By"
+              placeholder="Default sort"
+              emptyLabel="No sorting options."
+              options={plantSortOptions}
+              value={plantSort}
+              onChange={setPlantSort}
+              containerClassName="w-full"
+              clearLabel="Plant A-Z"
+              clearDescription="Reset to the default sort order"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setPlantQuery("");
+                setCompanyFilter("");
+                setManagerFilter("");
+                setStatusFilter("");
+                setActivityFilter("");
+                setPlantSort("name-asc");
+              }}
+              className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+            >
+              Clear
+            </button>
           </div>
         </div>
         <div className="data-table-scroll">
@@ -1248,21 +1440,25 @@ function PlantIndexPage() {
             <thead>
               <tr>
                 <th>Plant</th>
+                <th>Status</th>
                 <th>Company</th>
                 <th>Projects</th>
                 <th>Documents</th>
+                <th>Activity</th>
                 <th>Last Upload</th>
                 <th>Manager</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {plantRows.map(({ plant, docCount, projectCount }) => (
+              {sortedPlantRows.map(({ plant, docCount, projectCount, activityBand }) => (
                 <tr key={plant.id}>
                   <td className="text-strong">{plant.name}</td>
+                  <td>{plant.status || "-"}</td>
                   <td>{plant.company || "-"}</td>
                   <td>{projectCount}</td>
                   <td>{docCount}</td>
+                  <td>{activityBand}</td>
                   <td>{formatDate(plant.lastUpload)}</td>
                   <td>{plant.manager || "Unassigned"}</td>
                   <td>
@@ -1272,6 +1468,7 @@ function PlantIndexPage() {
                   </td>
                 </tr>
               ))}
+              {!sortedPlantRows.length ? <tr><td colSpan={9}>No plants matched the selected filters.</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -1494,6 +1691,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
   const [projectId, setProjectId] = useState(scopedProjectId || searchParams.get("projectId") || "");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [documentSort, setDocumentSort] = useState("uploaded-desc");
   const [serverDocuments, setServerDocuments] = useState<EnrichedDocument[]>(documents);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 25, total: documents.length });
@@ -1516,21 +1714,37 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     }
   }, [scopedPlantId, scopedProjectId, searchParams, user.role]);
 
-  const queryOptions = useMemo(
-    () => Array.from(new Set(documents.map((document) => document.name))).sort((a, b) => a.localeCompare(b)),
-    [documents],
-  );
+  const queryOptions = useMemo(() => {
+    const registry = new Map<string, ValueHelpOption>();
+    documents.forEach((document) => {
+      if (document.name) {
+        registry.set(`document:${document.name}`, { value: document.name, label: document.name, meta: "Document" });
+      }
+      if (document.plant) {
+        registry.set(`plant:${document.plant}`, { value: document.plant, label: document.plant, meta: "Plant" });
+      }
+      if (document.projectName) {
+        registry.set(`project:${document.projectName}`, { value: document.projectName, label: document.projectName, meta: "Project" });
+      }
+    });
+    return Array.from(registry.values()).sort((a, b) => {
+      if (a.label === b.label) return (a.meta || "").localeCompare(b.meta || "");
+      return a.label.localeCompare(b.label);
+    });
+  }, [documents]);
   const managerOptions = useMemo(
-    () => Array.from(new Set(documents.map((document) => document.managerName))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(documents.map((document) => document.managerName))).sort((a, b) => a.localeCompare(b)).map((option) => ({ value: option, label: option, meta: "Manager" })),
     [documents],
   );
   const identifierOptions = useMemo(
-    () => Array.from(new Set(documents.map((document) => document.identifier))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(documents.map((document) => document.identifier))).sort((a, b) => a.localeCompare(b)).map((option) => ({ value: option, label: option, meta: "Identifier" })),
     [documents],
   );
   const dateOptions = useMemo(
     () =>
-      Array.from(new Set(documents.map((document) => document.date).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b)),
+      Array.from(new Set(documents.map((document) => document.date).filter((value): value is string => Boolean(value))))
+        .sort((a, b) => a.localeCompare(b))
+        .map((option) => ({ value: option, label: formatDate(option), meta: option })),
     [documents],
   );
 
@@ -1585,6 +1799,46 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
 
   const availableProjects = projects.filter((project) => !plantId || project.plantId === plantId);
   const categories = Array.from(new Set(documents.map((document) => document.category))).sort((a, b) => a.localeCompare(b));
+  const categoryOptions = categories.map((item) => ({ value: item, label: item, meta: "Category" }));
+  const plantValueHelpOptions = plants
+    .filter((plant) => user.role !== "Mining Manager" || assignedPlantIds(user).includes(plant.id))
+    .map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" }));
+  const projectValueHelpOptions = availableProjects.map((project) => ({ value: project.id, label: project.name, meta: project.code || project.plantName }));
+  const documentSortOptions = useMemo(
+    () => [
+      { value: "uploaded-desc", label: "Latest uploaded first", meta: "Sort" },
+      { value: "uploaded-asc", label: "Oldest uploaded first", meta: "Sort" },
+      { value: "name-asc", label: "Document A-Z", meta: "Sort" },
+      { value: "plant-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "project-asc", label: "Project A-Z", meta: "Sort" },
+      { value: "manager-asc", label: "Manager A-Z", meta: "Sort" },
+      { value: "category-asc", label: "Category A-Z", meta: "Sort" },
+    ],
+    [],
+  );
+  const sortedDocuments = useMemo(() => {
+    const next = [...filtered];
+    next.sort((left, right) => {
+      switch (documentSort) {
+        case "uploaded-asc":
+          return compareDateValue(left.date, right.date) || compareText(left.name, right.name);
+        case "name-asc":
+          return compareText(left.name, right.name);
+        case "plant-asc":
+          return compareText(left.plant, right.plant) || compareText(left.name, right.name);
+        case "project-asc":
+          return compareText(left.projectName, right.projectName) || compareText(left.name, right.name);
+        case "manager-asc":
+          return compareText(left.managerName, right.managerName) || compareText(left.name, right.name);
+        case "category-asc":
+          return compareText(left.category, right.category) || compareText(left.name, right.name);
+        case "uploaded-desc":
+        default:
+          return compareDateValue(right.date, left.date) || compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [documentSort, filtered]);
   const title = scopedProjectId
     ? `${projects.find((project) => project.id === scopedProjectId)?.name || "Project"} documents`
     : "Document listing";
@@ -1598,69 +1852,102 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
       ]} />
 
       <SectionCard title={title} subtitle="Separate listing page with advanced search and structured filters">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <FilterField icon={Search} label="Search">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} list="document-search-options" placeholder="Search documents, plants, projects..." className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <datalist id="document-search-options">
-              {queryOptions.map((option) => <option key={option} value={option} />)}
-            </datalist>
+            <ValueHelp
+              placeholder="Search documents, plants, projects..."
+              emptyLabel="No matching documents, plants, or projects."
+              options={queryOptions}
+              value={query}
+              onChange={setQuery}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={Users} label="Manager">
-            <select value={manager} onChange={(event) => setManager(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">All managers</option>
-              {managerOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="All managers"
+              emptyLabel="No matching managers."
+              options={managerOptions}
+              value={manager}
+              onChange={setManager}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={FileText} label="Identifier">
-            <select value={identifier} onChange={(event) => setIdentifier(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">All identifiers</option>
-              {identifierOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="All identifiers"
+              emptyLabel="No matching identifiers."
+              options={identifierOptions}
+              value={identifier}
+              onChange={setIdentifier}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={BarChart3} label="Category">
-            <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">All categories</option>
-              {categories.map((item) => (
-                <option key={item} value={item}>{item}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="All categories"
+              emptyLabel="No matching categories."
+              options={categoryOptions}
+              value={category}
+              onChange={setCategory}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={Building2} label="Plant">
-            <select value={plantId} onChange={(event) => setPlantId(event.target.value)} disabled={user.role === "Mining Manager" || Boolean(scopedPlantId)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 disabled:bg-slate-100">
-              <option value="">All plants</option>
-              {plants.filter((plant) => user.role !== "Mining Manager" || assignedPlantIds(user).includes(plant.id)).map((plant) => (
-                <option key={plant.id} value={plant.id}>{plant.name}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="All plants"
+              emptyLabel="No matching plants."
+              options={plantValueHelpOptions}
+              value={plantId}
+              onChange={setPlantId}
+              disabled={user.role === "Mining Manager" || Boolean(scopedPlantId)}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={FolderKanban} label="Project">
-            <select value={projectId} onChange={(event) => setProjectId(event.target.value)} disabled={Boolean(scopedProjectId)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500 disabled:bg-slate-100">
-              <option value="">All projects</option>
-              {availableProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="All projects"
+              emptyLabel="No matching projects."
+              options={projectValueHelpOptions}
+              value={projectId}
+              onChange={setProjectId}
+              disabled={Boolean(scopedProjectId)}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={Clock3} label="From date">
-            <select value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">Any start date</option>
-              {dateOptions.map((option) => (
-                <option key={`from-${option}`} value={option}>{formatDate(option)}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="Any start date"
+              emptyLabel="No matching dates."
+              options={dateOptions}
+              value={dateFrom}
+              onChange={setDateFrom}
+              containerClassName="w-full"
+            />
           </FilterField>
           <FilterField icon={Clock3} label="To date">
-            <select value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">Any end date</option>
-              {dateOptions.map((option) => (
-                <option key={`to-${option}`} value={option}>{formatDate(option)}</option>
-              ))}
-            </select>
+            <ValueHelp
+              placeholder="Any end date"
+              emptyLabel="No matching dates."
+              options={dateOptions}
+              value={dateTo}
+              onChange={setDateTo}
+              containerClassName="w-full"
+            />
           </FilterField>
+          <div className="flex items-end">
+            <ValueHelp
+              label="Sort By"
+              placeholder="Default sort"
+              emptyLabel="No sorting options."
+              options={documentSortOptions}
+              value={documentSort}
+              onChange={setDocumentSort}
+              containerClassName="w-full"
+              clearLabel="Latest uploaded first"
+              clearDescription="Reset to the default sort order"
+            />
+          </div>
           <div className="flex items-end">
             <button
               onClick={() => {
@@ -1670,6 +1957,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                 setCategory("");
                 setDateFrom("");
                 setDateTo("");
+                setDocumentSort("uploaded-desc");
                 if (!scopedPlantId && user.role !== "Mining Manager") setPlantId("");
                 if (!scopedProjectId) setProjectId("");
               }}
@@ -1683,7 +1971,6 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
         <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200">
           <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
             <span>{documentsLoading ? "Refreshing documents..." : `${pagination.total} document${pagination.total === 1 ? "" : "s"} in current scope`}</span>
-            <span>Backend filtered by project, plant, category, upload date, and search query</span>
           </div>
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
@@ -1697,7 +1984,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
-              {filtered.map((document) => (
+              {sortedDocuments.map((document) => (
                 <tr key={document.id} className="transition hover:bg-slate-50">
                   <td className="px-4 py-4">
                     <button onClick={() => navigate(`/documents/${document.id}`)} className="text-left">
@@ -1712,7 +1999,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                   <td className="px-4 py-4 text-slate-600">{formatDate(document.date)}</td>
                 </tr>
               ))}
-              {!filtered.length ? (
+              {!sortedDocuments.length ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No documents matched the selected filters.</td>
                 </tr>
@@ -2344,7 +2631,7 @@ function AnalyticsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
+      <div className="grid gap-6">
         <div className="data-table-panel">
           <div className="data-table-toolbar">
             <h2 className="text-lg font-semibold text-slate-900">Executive Briefing</h2>
@@ -3081,6 +3368,14 @@ function AdminMasterDataPage() {
       }),
     [documentPlantFilter, documentProjectFilter, documents],
   );
+  const documentPlantOptions = useMemo(
+    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    [plants],
+  );
+  const documentProjectOptions = useMemo(
+    () => projects.map((project) => ({ value: project.id, label: project.name, meta: project.code || project.plantName })),
+    [projects],
+  );
 
   function resetMessages() {
     setNotice("");
@@ -3615,18 +3910,22 @@ function AdminMasterDataPage() {
 
       <SectionCard title="Document registry" subtitle="Plant-wise document visibility with edit and delete controls">
         <div className="mb-5 flex flex-wrap items-center gap-3">
-          <select value={documentPlantFilter} onChange={(event) => setDocumentPlantFilter(event.target.value)} className="h-11 min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-            <option value="">All plants</option>
-            {plants.map((plant) => (
-              <option key={`doc-plant-${plant.id}`} value={plant.id}>{plant.name}</option>
-            ))}
-          </select>
-          <select value={documentProjectFilter} onChange={(event) => setDocumentProjectFilter(event.target.value)} className="h-11 min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-            <option value="">All projects</option>
-            {projects.map((project) => (
-              <option key={`doc-project-${project.id}`} value={project.id}>{project.name}</option>
-            ))}
-          </select>
+          <ValueHelp
+            placeholder="All plants"
+            emptyLabel="No matching plants."
+            options={documentPlantOptions}
+            value={documentPlantFilter}
+            onChange={setDocumentPlantFilter}
+            containerClassName="min-w-[220px]"
+          />
+          <ValueHelp
+            placeholder="All projects"
+            emptyLabel="No matching projects."
+            options={documentProjectOptions}
+            value={documentProjectFilter}
+            onChange={setDocumentProjectFilter}
+            containerClassName="min-w-[220px]"
+          />
         </div>
         <div className="overflow-hidden rounded-[24px] border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
@@ -3690,6 +3989,10 @@ function ManagerOversightPage() {
   const { user, users, plants, refreshData } = usePortal();
   const [managerFilter, setManagerFilter] = useState("");
   const [plantFilter, setPlantFilter] = useState("");
+  const [emailFilter, setEmailFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [scopeFilter, setScopeFilter] = useState("");
+  const [managerSort, setManagerSort] = useState("name-asc");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -3703,19 +4006,66 @@ function ManagerOversightPage() {
   );
 
   const managerOptions = useMemo(
-    () => managers.map((candidate) => candidate.name).sort((a, b) => a.localeCompare(b)),
+    () => managers.map((candidate) => candidate.name).sort((a, b) => a.localeCompare(b)).map((candidate) => ({ value: candidate, label: candidate, meta: "Manager" })),
     [managers],
+  );
+  const managerPlantOptions = useMemo(
+    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    [plants],
+  );
+  const emailOptions = useMemo(() => buildValueHelpOptions(managers.map((candidate) => candidate.email), "Email"), [managers]);
+  const statusOptions = useMemo(() => buildValueHelpOptions(managers.map((candidate) => candidate.status), "Status"), [managers]);
+  const scopeOptions = useMemo(
+    () => [
+      { value: "unassigned", label: "Unassigned", meta: "Plant scope" },
+      { value: "single", label: "Single plant", meta: "Plant scope" },
+      { value: "multi", label: "Multi plant", meta: "Plant scope" },
+    ],
+    [],
+  );
+  const managerSortOptions = useMemo(
+    () => [
+      { value: "name-asc", label: "Manager A-Z", meta: "Sort" },
+      { value: "email-asc", label: "Email A-Z", meta: "Sort" },
+      { value: "status-asc", label: "Status A-Z", meta: "Sort" },
+      { value: "scope-desc", label: "Most plants first", meta: "Sort" },
+    ],
+    [],
   );
 
   const filtered = useMemo(
     () =>
       managers.filter((candidate) => {
-        const matchesManager = !managerFilter || candidate.name === managerFilter;
-        const matchesPlant = !plantFilter || candidate.assignedPlantIds?.includes(plantFilter);
-        return matchesManager && matchesPlant;
+        const assignedIds = candidate.assignedPlantIds || (candidate.plantId ? [candidate.plantId] : []);
+        const scope = assignedIds.length > 1 ? "multi" : assignedIds.length === 1 ? "single" : "unassigned";
+        const matchesManager = matchesValueHelpFilter(managerFilter, candidate.name);
+        const matchesPlant = !plantFilter || assignedIds.includes(plantFilter);
+        const matchesEmail = matchesValueHelpFilter(emailFilter, candidate.email);
+        const matchesStatus = matchesValueHelpFilter(statusFilter, candidate.status);
+        const matchesScope = matchesValueHelpFilter(scopeFilter, scope);
+        return matchesManager && matchesPlant && matchesEmail && matchesStatus && matchesScope;
       }),
-    [managerFilter, managers, plantFilter],
+    [emailFilter, managerFilter, managers, plantFilter, scopeFilter, statusFilter],
   );
+  const sortedManagers = useMemo(() => {
+    const next = [...filtered];
+    next.sort((left, right) => {
+      const leftScope = left.assignedPlantIds?.length || (left.plantId ? 1 : 0);
+      const rightScope = right.assignedPlantIds?.length || (right.plantId ? 1 : 0);
+      switch (managerSort) {
+        case "email-asc":
+          return compareText(left.email, right.email) || compareText(left.name, right.name);
+        case "status-asc":
+          return compareText(left.status, right.status) || compareText(left.name, right.name);
+        case "scope-desc":
+          return compareNumber(rightScope, leftScope) || compareText(left.name, right.name);
+        case "name-asc":
+        default:
+          return compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filtered, managerSort]);
 
   function openEditor(target: User) {
     setEditor(target);
@@ -3796,24 +4146,90 @@ function ManagerOversightPage() {
           <MetricCard label="Portal accounts" value={managers.length} hint="Manager records available for document coordination." icon={ShieldCheck} />
         </div>
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <select
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <ValueHelp
+            label="Manager"
+            placeholder="All managers"
+            emptyLabel="No matching managers."
+            options={managerOptions}
             value={managerFilter}
-            onChange={(event) => setManagerFilter(event.target.value)}
-            className="h-12 w-full max-w-md rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-          >
-            <option value="">All managers</option>
-            {managerOptions.map((candidate) => (
-              <option key={candidate} value={candidate}>{candidate}</option>
-            ))}
-          </select>
-          <select value={plantFilter} onChange={(event) => setPlantFilter(event.target.value)} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-            <option value="">All plants</option>
-            {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name}</option>)}
-          </select>
-          {message ? <div className="text-sm text-emerald-700">{message}</div> : null}
-          {error ? <div className="text-sm text-[#BB0000]">{error}</div> : null}
+            onChange={setManagerFilter}
+            containerClassName="w-full"
+            triggerClassName="h-12"
+          />
+          <ValueHelp
+            label="Plant"
+            placeholder="All plants"
+            emptyLabel="No matching plants."
+            options={managerPlantOptions}
+            value={plantFilter}
+            onChange={setPlantFilter}
+            containerClassName="w-full"
+            triggerClassName="h-12"
+          />
+          <ValueHelp
+            label="Email"
+            placeholder="All emails"
+            emptyLabel="No matching emails."
+            options={emailOptions}
+            value={emailFilter}
+            onChange={setEmailFilter}
+            containerClassName="w-full"
+            triggerClassName="h-12"
+          />
+          <ValueHelp
+            label="Status"
+            placeholder="All statuses"
+            emptyLabel="No matching statuses."
+            options={statusOptions}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            containerClassName="w-full"
+            triggerClassName="h-12"
+          />
+          <div className="flex items-end gap-3">
+            <ValueHelp
+              label="Scope"
+              placeholder="All scopes"
+              emptyLabel="No matching scopes."
+              options={scopeOptions}
+              value={scopeFilter}
+              onChange={setScopeFilter}
+              containerClassName="w-full"
+              triggerClassName="h-12"
+            />
+          </div>
+          <div className="flex items-end gap-3">
+            <ValueHelp
+              label="Sort By"
+              placeholder="Default sort"
+              emptyLabel="No sorting options."
+              options={managerSortOptions}
+              value={managerSort}
+              onChange={setManagerSort}
+              containerClassName="w-full"
+              triggerClassName="h-12"
+              clearLabel="Manager A-Z"
+              clearDescription="Reset to the default sort order"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setManagerFilter("");
+                setPlantFilter("");
+                setEmailFilter("");
+                setStatusFilter("");
+                setScopeFilter("");
+                setManagerSort("name-asc");
+              }}
+              className="h-12 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Clear
+            </button>
+          </div>
         </div>
+        {message ? <div className="mt-4 text-sm text-emerald-700">{message}</div> : null}
+        {error ? <div className="mt-2 text-sm text-[#BB0000]">{error}</div> : null}
 
         <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
@@ -3821,12 +4237,14 @@ function ManagerOversightPage() {
               <tr className="text-left text-sm text-slate-500">
                 <th className="px-4 py-3 font-medium">Manager</th>
                 <th className="px-4 py-3 font-medium">Email</th>
-                <th className="px-4 py-3 font-medium">Plant</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Scope</th>
+                <th className="px-4 py-3 font-medium">Plants</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
-              {filtered.map((candidate) => (
+              {sortedManagers.map((candidate) => (
                 <tr key={candidate.id}>
                   <td className="px-4 py-4">
                     <button
@@ -3838,6 +4256,14 @@ function ManagerOversightPage() {
                     <div className="mt-1 text-xs text-slate-500">{candidate.id}</div>
                   </td>
                   <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
+                  <td className="px-4 py-4 text-slate-600">{candidate.status}</td>
+                  <td className="px-4 py-4 text-slate-600">
+                    {(candidate.assignedPlantIds?.length || (candidate.plantId ? 1 : 0)) > 1
+                      ? "Multi plant"
+                      : (candidate.assignedPlantIds?.length || (candidate.plantId ? 1 : 0)) === 1
+                        ? "Single plant"
+                        : "Unassigned"}
+                  </td>
                   <td className="px-4 py-4 text-slate-600">{candidate.assignedPlants?.join(", ") || candidate.plant || "All plants"}</td>
                   <td className="px-4 py-4">
                     <div className="flex flex-wrap gap-2">
@@ -3862,9 +4288,9 @@ function ManagerOversightPage() {
                   </td>
                 </tr>
               ))}
-              {!filtered.length ? (
+              {!sortedManagers.length ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-10 text-center text-slate-500">No managers matched the current search.</td>
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No managers matched the current search.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -4144,6 +4570,16 @@ function AdminNetworkPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState({ label: "", address: "", status: "Allowed" as IpRule["status"] });
+  const [ruleSearch, setRuleSearch] = useState("");
+  const [ruleStatusFilter, setRuleStatusFilter] = useState("");
+  const [personaFilter, setPersonaFilter] = useState("");
+  const [personaRoleFilter, setPersonaRoleFilter] = useState("");
+  const [personaIpFilter, setPersonaIpFilter] = useState("");
+  const [watchIpFilter, setWatchIpFilter] = useState("");
+  const [watchRoleFilter, setWatchRoleFilter] = useState("");
+  const [ruleSort, setRuleSort] = useState("updated-desc");
+  const [personaSort, setPersonaSort] = useState("last-seen-desc");
+  const [watchSort, setWatchSort] = useState("logins-desc");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [activityError, setActivityError] = useState("");
@@ -4255,6 +4691,135 @@ function AdminNetworkPage() {
   const allowedCount = rules.filter((rule) => rule.status === "Allowed").length;
   const blockedCount = rules.filter((rule) => rule.status === "Blocked").length;
   const reviewCount = rules.filter((rule) => rule.status === "Review").length;
+  const ruleSearchOptions = useMemo(
+    () => {
+      const registry = new Map<string, ValueHelpOption>();
+      rules.forEach((rule) => {
+        registry.set(`label:${rule.label}`, { value: rule.label, label: rule.label, meta: "Rule label" });
+        registry.set(`address:${rule.address}`, { value: rule.address, label: rule.address, meta: "Address" });
+      });
+      return Array.from(registry.values()).sort((a, b) => a.label.localeCompare(b.label) || (a.meta || "").localeCompare(b.meta || ""));
+    },
+    [rules],
+  );
+  const ruleStatusOptions = useMemo(() => buildValueHelpOptions(rules.map((rule) => rule.status), "Rule status"), [rules]);
+  const ruleSortOptions = useMemo(
+    () => [
+      { value: "updated-desc", label: "Latest updated first", meta: "Sort" },
+      { value: "label-asc", label: "Label A-Z", meta: "Sort" },
+      { value: "status-asc", label: "Status A-Z", meta: "Sort" },
+      { value: "address-asc", label: "Address A-Z", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredRules = useMemo(
+    () =>
+      rules.filter((rule) => {
+        const matchesSearch = !ruleSearch || [rule.label, rule.address].some((value) => normalizeSearchValue(value).includes(normalizeSearchValue(ruleSearch)));
+        return matchesSearch && matchesValueHelpFilter(ruleStatusFilter, rule.status);
+      }),
+    [ruleSearch, ruleStatusFilter, rules],
+  );
+  const sortedRules = useMemo(() => {
+    const next = [...filteredRules];
+    next.sort((left, right) => {
+      switch (ruleSort) {
+        case "label-asc":
+          return compareText(left.label, right.label);
+        case "status-asc":
+          return compareText(left.status, right.status) || compareText(left.label, right.label);
+        case "address-asc":
+          return compareText(left.address, right.address) || compareText(left.label, right.label);
+        case "updated-desc":
+        default:
+          return compareDateValue(right.lastUpdated, left.lastUpdated) || compareText(left.label, right.label);
+      }
+    });
+    return next;
+  }, [filteredRules, ruleSort]);
+  const personaOptions = useMemo(() => buildValueHelpOptions(personaSummaries.map((persona) => persona.name), "Persona"), [personaSummaries]);
+  const personaRoleOptions = useMemo(() => buildValueHelpOptions(personaSummaries.map((persona) => persona.role), "Role"), [personaSummaries]);
+  const personaIpOptions = useMemo(
+    () => buildValueHelpOptions(personaSummaries.flatMap((persona) => Array.from(persona.ips)), "IP"),
+    [personaSummaries],
+  );
+  const personaSortOptions = useMemo(
+    () => [
+      { value: "last-seen-desc", label: "Last seen latest", meta: "Sort" },
+      { value: "name-asc", label: "Persona A-Z", meta: "Sort" },
+      { value: "role-asc", label: "Role A-Z", meta: "Sort" },
+      { value: "logins-desc", label: "Most logins first", meta: "Sort" },
+      { value: "ip-footprint-desc", label: "Most IPs first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredPersonas = useMemo(
+    () =>
+      personaSummaries.filter((persona) => (
+        matchesValueHelpFilter(personaFilter, persona.name) &&
+        matchesValueHelpFilter(personaRoleFilter, persona.role) &&
+        (!personaIpFilter || persona.events.some((event) => loginIp(event) === personaIpFilter))
+      )),
+    [personaFilter, personaIpFilter, personaRoleFilter, personaSummaries],
+  );
+  const sortedPersonas = useMemo(() => {
+    const next = [...filteredPersonas];
+    next.sort((left, right) => {
+      switch (personaSort) {
+        case "name-asc":
+          return compareText(left.name, right.name);
+        case "role-asc":
+          return compareText(left.role, right.role) || compareText(left.name, right.name);
+        case "logins-desc":
+          return compareNumber(right.total, left.total) || compareText(left.name, right.name);
+        case "ip-footprint-desc":
+          return compareNumber(right.ips.size, left.ips.size) || compareText(left.name, right.name);
+        case "last-seen-desc":
+        default:
+          return compareDateValue(right.lastSeen, left.lastSeen) || compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filteredPersonas, personaSort]);
+  const watchIpOptions = useMemo(() => buildValueHelpOptions(ipSummaries.map((entry) => entry.ip), "IP"), [ipSummaries]);
+  const watchRoleOptions = useMemo(
+    () => buildValueHelpOptions(ipSummaries.flatMap((entry) => Array.from(entry.roles)), "Role"),
+    [ipSummaries],
+  );
+  const watchSortOptions = useMemo(
+    () => [
+      { value: "logins-desc", label: "Most logins first", meta: "Sort" },
+      { value: "ip-asc", label: "IP A-Z", meta: "Sort" },
+      { value: "last-seen-desc", label: "Last seen latest", meta: "Sort" },
+      { value: "personas-desc", label: "Most personas first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredIpSummaries = useMemo(
+    () =>
+      ipSummaries.filter((entry) => (
+        matchesValueHelpFilter(watchIpFilter, entry.ip) &&
+        (!watchRoleFilter || entry.roles.has(watchRoleFilter))
+      )),
+    [ipSummaries, watchIpFilter, watchRoleFilter],
+  );
+  const sortedIpSummaries = useMemo(() => {
+    const next = [...filteredIpSummaries];
+    next.sort((left, right) => {
+      switch (watchSort) {
+        case "ip-asc":
+          return compareText(left.ip, right.ip);
+        case "last-seen-desc":
+          return compareDateValue(right.lastSeen, left.lastSeen) || compareText(left.ip, right.ip);
+        case "personas-desc":
+          return compareNumber(right.personas.size, left.personas.size) || compareText(left.ip, right.ip);
+        case "logins-desc":
+        default:
+          return compareNumber(right.total, left.total) || compareText(left.ip, right.ip);
+      }
+    });
+    return next;
+  }, [filteredIpSummaries, watchSort]);
 
   return (
     <div className="space-y-6">
@@ -4327,116 +4892,206 @@ function AdminNetworkPage() {
             <button onClick={() => void createRule()} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">Save IP</button>
           </div>
         ) : null}
-        <div className="grid gap-4">
-          {rules.map((rule) => (
-            <div key={rule.id} className="flex flex-wrap items-center justify-between gap-4 rounded-[28px] border border-slate-200 bg-white p-5">
-              <div>
-                <div className="text-base font-semibold text-slate-900">{rule.label}</div>
-                <div className="mt-1 font-mono text-sm text-slate-500">{rule.address}</div>
-                <div className="mt-1 text-xs text-slate-400">Updated {formatDate(rule.lastUpdated)}</div>
-              </div>
-              <select value={rule.status} onChange={(event) => updateRule(rule.id, event.target.value as IpRule["status"])} className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-teal-500">
-                <option value="Allowed">Allowed</option>
-                <option value="Blocked">Blocked</option>
-                <option value="Review">Review</option>
-              </select>
-            </div>
-          ))}
+        <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <ValueHelp
+            label="Rule Search"
+            placeholder="Label or address"
+            emptyLabel="No matching rules."
+            options={ruleSearchOptions}
+            value={ruleSearch}
+            onChange={setRuleSearch}
+            containerClassName="w-full"
+          />
+          <ValueHelp
+            label="Rule Status"
+            placeholder="All statuses"
+            emptyLabel="No matching statuses."
+            options={ruleStatusOptions}
+            value={ruleStatusFilter}
+            onChange={setRuleStatusFilter}
+            containerClassName="w-full"
+          />
+          <div className="flex items-end">
+            <ValueHelp
+              label="Sort By"
+              placeholder="Default sort"
+              emptyLabel="No sorting options."
+              options={ruleSortOptions}
+              value={ruleSort}
+              onChange={setRuleSort}
+              containerClassName="w-full"
+              clearLabel="Latest updated first"
+              clearDescription="Reset to the default sort order"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setRuleSearch("");
+                setRuleStatusFilter("");
+                setRuleSort("updated-desc");
+              }}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Clear rule filters
+            </button>
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-[28px] border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-sm text-slate-500">
+                <th className="px-4 py-3 font-medium">Label</th>
+                <th className="px-4 py-3 font-medium">Address</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Last updated</th>
+                <th className="px-4 py-3 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white text-sm">
+              {sortedRules.map((rule) => (
+                <tr key={rule.id}>
+                  <td className="px-4 py-4 font-medium text-slate-900">{rule.label}</td>
+                  <td className="px-4 py-4 font-mono text-slate-600">{rule.address}</td>
+                  <td className="px-4 py-4 text-slate-600">{rule.status}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDate(rule.lastUpdated)}</td>
+                  <td className="px-4 py-4">
+                    <select value={rule.status} onChange={(event) => updateRule(rule.id, event.target.value as IpRule["status"])} className="h-10 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-teal-500">
+                      <option value="Allowed">Allowed</option>
+                      <option value="Blocked">Blocked</option>
+                      <option value="Review">Review</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+              {!sortedRules.length ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">No IP rules matched the current filters.</td></tr> : null}
+            </tbody>
+          </table>
         </div>
       </SectionCard>
 
-      <SectionCard title="Security operations overview" subtitle="At-a-glance posture across configured rules and observed sign-ins">
-        {loading ? <div className="text-sm text-slate-500">Loading network telemetry...</div> : null}
-        {!loading ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Allowed rules" value={allowedCount} hint="Ingress sources explicitly permitted by policy." icon={ShieldCheck} />
-            <MetricCard label="Blocked rules" value={blockedCount} hint="Known endpoints currently denied from platform access." icon={Lock} tone="rose" />
-            <MetricCard label="Review queue" value={reviewCount} hint="Addresses awaiting analyst disposition or follow-up." icon={TriangleAlert} tone="amber" />
-            <MetricCard label="Latest sign-in time" value={latestLogin ? formatDate(latestLogin.createdAt) : "-"} hint={latestLogin ? formatDateTime(latestLogin.createdAt) : "No login telemetry is available yet."} icon={Clock3} tone="blue" />
+      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <SectionCard title="Security operations overview" subtitle="At-a-glance posture across configured rules and observed sign-ins">
+          {loading ? <div className="text-sm text-slate-500">Loading network telemetry...</div> : null}
+          {!loading ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <MetricCard label="Allowed rules" value={allowedCount} hint="Ingress sources explicitly permitted by policy." icon={ShieldCheck} />
+              <MetricCard label="Blocked rules" value={blockedCount} hint="Known endpoints currently denied from platform access." icon={Lock} tone="rose" />
+              <MetricCard label="Review queue" value={reviewCount} hint="Addresses awaiting analyst disposition or follow-up." icon={TriangleAlert} tone="amber" />
+              <MetricCard label="Latest sign-in time" value={latestLogin ? formatDate(latestLogin.createdAt) : "-"} hint={latestLogin ? formatDateTime(latestLogin.createdAt) : "No login telemetry is available yet."} icon={Clock3} tone="blue" />
+            </div>
+          ) : null}
+        </SectionCard>
+
+        <SectionCard title="Network posture summary" subtitle="Quick read on rule mix, identity coverage, and active ingress">
+          <div className="grid gap-3">
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Configured rule mix</div>
+              <div className="mt-2 text-sm text-slate-700">{allowedCount} allowed, {reviewCount} in review, {blockedCount} blocked.</div>
+            </div>
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Observed identity spread</div>
+              <div className="mt-2 text-sm text-slate-700">{personaSummaries.length} personas across {uniqueIpCount} ingress points.</div>
+            </div>
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Latest ingress</div>
+              <div className="mt-2 text-sm text-slate-700">{latestLogin ? `${latestLogin.userName || "Unknown user"} from ${loginIp(latestLogin)} at ${formatDateTime(latestLogin.createdAt)}` : "No login telemetry is available yet."}</div>
+            </div>
           </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Persona login matrix" subtitle="Every persona with login count, IP spread, and latest observed sign-in">
+        {loading ? <div className="text-sm text-slate-500">Collecting persona login activity...</div> : null}
+        {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
+        {!loading && !activityError && personaSummaries.length === 0 ? <div className="text-sm text-slate-500">No successful login events have been recorded yet.</div> : null}
+        {!loading && !activityError ? (
+          <>
+            <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <ValueHelp label="Persona" placeholder="All personas" emptyLabel="No matching personas." options={personaOptions} value={personaFilter} onChange={setPersonaFilter} containerClassName="w-full" />
+              <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={personaRoleOptions} value={personaRoleFilter} onChange={setPersonaRoleFilter} containerClassName="w-full" />
+              <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={personaIpOptions} value={personaIpFilter} onChange={setPersonaIpFilter} containerClassName="w-full" />
+              <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={personaSortOptions} value={personaSort} onChange={setPersonaSort} containerClassName="w-full" clearLabel="Last seen latest" clearDescription="Reset to the default sort order" />
+              <div className="flex items-end">
+                <button type="button" onClick={() => { setPersonaFilter(""); setPersonaRoleFilter(""); setPersonaIpFilter(""); setPersonaSort("last-seen-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+              </div>
+            </div>
+            <div className="overflow-hidden rounded-[28px] border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr className="text-left text-sm text-slate-500">
+                    <th className="px-4 py-3 font-medium">Persona</th>
+                    <th className="px-4 py-3 font-medium">Role</th>
+                    <th className="px-4 py-3 font-medium">Email</th>
+                    <th className="px-4 py-3 font-medium">Logins</th>
+                    <th className="px-4 py-3 font-medium">IP footprint</th>
+                    <th className="px-4 py-3 font-medium">Latest IP</th>
+                    <th className="px-4 py-3 font-medium">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                  {sortedPersonas.map((persona) => (
+                    <tr key={persona.id}>
+                      <td className="px-4 py-4 font-medium text-slate-900">{persona.name}</td>
+                      <td className="px-4 py-4 text-slate-600">{persona.role}</td>
+                      <td className="px-4 py-4 text-slate-600">{persona.email || "-"}</td>
+                      <td className="px-4 py-4 text-slate-600">{persona.total}</td>
+                      <td className="px-4 py-4 text-slate-600">{Array.from(persona.ips).join(", ")}</td>
+                      <td className="px-4 py-4 font-mono text-slate-600">{loginIp(persona.events[0])}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDateTime(persona.lastSeen)}</td>
+                    </tr>
+                  ))}
+                  {!sortedPersonas.length ? <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500">No personas matched the current filters.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : null}
       </SectionCard>
 
-      <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
-        <SectionCard title="Persona login matrix" subtitle="Every persona with login count, IP spread, and latest observed sign-in">
+      <SectionCard title="Ingress watchlist" subtitle="IP-centric view of who is entering the platform and how often">
           {loading ? <div className="text-sm text-slate-500">Collecting persona login activity...</div> : null}
-          {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
-          {!loading && !activityError && personaSummaries.length === 0 ? <div className="text-sm text-slate-500">No successful login events have been recorded yet.</div> : null}
-          {!loading && !activityError ? (
-            <div className="space-y-4">
-              {personaSummaries.map((persona) => (
-                <div key={persona.id} className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,_#ffffff,_#f8fafc)] p-5 shadow-[0_14px_30px_rgba(15,23,42,0.05)]">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <div className="text-lg font-semibold text-slate-950">{persona.name}</div>
-                      <div className="mt-1 text-sm text-slate-500">{persona.role}{persona.email ? ` • ${persona.email}` : ""}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-950 px-4 py-2 text-right text-white">
-                      <div className="text-xs uppercase tracking-[0.22em] text-white/55">Login volume</div>
-                      <div className="mt-1 text-xl font-semibold">{persona.total}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Last seen</div>
-                      <div className="mt-2 text-sm font-medium text-slate-900">{formatDateTime(persona.lastSeen)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">IP footprint</div>
-                      <div className="mt-2 text-sm font-medium text-slate-900">{statLabel(persona.ips.size, "IP")}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Most recent source</div>
-                      <div className="mt-2 font-mono text-sm text-slate-900">{loginIp(persona.events[0])}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {Array.from(persona.ips).map((ip) => (
-                      <span key={`${persona.id}-${ip}`} className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-900">
-                        {ip}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
+        {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
+        {!loading && !activityError && ipSummaries.length === 0 ? <div className="text-sm text-slate-500">No IP activity is available yet.</div> : null}
+        {!loading && !activityError ? (
+          <>
+            <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={watchIpOptions} value={watchIpFilter} onChange={setWatchIpFilter} containerClassName="w-full" />
+              <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={watchRoleOptions} value={watchRoleFilter} onChange={setWatchRoleFilter} containerClassName="w-full" />
+              <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={watchSortOptions} value={watchSort} onChange={setWatchSort} containerClassName="w-full" clearLabel="Most logins first" clearDescription="Reset to the default sort order" />
+              <div className="flex items-end">
+                <button type="button" onClick={() => { setWatchIpFilter(""); setWatchRoleFilter(""); setWatchSort("logins-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+              </div>
             </div>
-          ) : null}
-        </SectionCard>
-
-        <SectionCard title="Ingress watchlist" subtitle="IP-centric view of who is entering the platform and how often">
-          {loading ? <div className="text-sm text-slate-500">Building ingress watchlist...</div> : null}
-          {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
-          {!loading && !activityError && ipSummaries.length === 0 ? <div className="text-sm text-slate-500">No IP activity is available yet.</div> : null}
-          {!loading && !activityError ? (
-            <div className="space-y-4">
-              {ipSummaries.map((entry) => (
-                <div key={entry.ip} className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-mono text-base font-semibold text-slate-950">{entry.ip}</div>
-                      <div className="mt-1 text-sm text-slate-500">Last seen {formatDateTime(entry.lastSeen)}</div>
-                    </div>
-                    <div className="rounded-2xl bg-white px-3 py-2 text-right shadow-sm">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Logins</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-950">{entry.total}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Personas</div>
-                      <div className="mt-2 text-sm text-slate-900">{Array.from(entry.personas).join(", ")}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Roles</div>
-                      <div className="mt-2 text-sm text-slate-900">{Array.from(entry.roles).join(", ")}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-hidden rounded-[28px] border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr className="text-left text-sm text-slate-500">
+                    <th className="px-4 py-3 font-medium">IP</th>
+                    <th className="px-4 py-3 font-medium">Logins</th>
+                    <th className="px-4 py-3 font-medium">Personas</th>
+                    <th className="px-4 py-3 font-medium">Roles</th>
+                    <th className="px-4 py-3 font-medium">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                  {sortedIpSummaries.map((entry) => (
+                    <tr key={entry.ip}>
+                      <td className="px-4 py-4 font-mono text-slate-900">{entry.ip}</td>
+                      <td className="px-4 py-4 text-slate-600">{entry.total}</td>
+                      <td className="px-4 py-4 text-slate-600">{Array.from(entry.personas).join(", ")}</td>
+                      <td className="px-4 py-4 text-slate-600">{Array.from(entry.roles).join(", ")}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDateTime(entry.lastSeen)}</td>
+                    </tr>
+                  ))}
+                  {!sortedIpSummaries.length ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">No IP entries matched the current filters.</td></tr> : null}
+                </tbody>
+              </table>
             </div>
-          ) : null}
-        </SectionCard>
-      </div>
+          </>
+        ) : null}
+      </SectionCard>
     </div>
   );
 }
@@ -4450,6 +5105,17 @@ function AdminSessionsPage() {
   const [outsideHoursAttempts, setOutsideHoursAttempts] = useState<OutsideHoursAttempt[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionError, setSessionError] = useState("");
+  const [sessionUserFilter, setSessionUserFilter] = useState("");
+  const [sessionRoleFilter, setSessionRoleFilter] = useState("");
+  const [sessionStatusFilter, setSessionStatusFilter] = useState("");
+  const [sessionIpFilter, setSessionIpFilter] = useState("");
+  const [outsideUserFilter, setOutsideUserFilter] = useState("");
+  const [outsideIpFilter, setOutsideIpFilter] = useState("");
+  const [blockedUserFilter, setBlockedUserFilter] = useState("");
+  const [blockedIpFilter, setBlockedIpFilter] = useState("");
+  const [sessionSort, setSessionSort] = useState("started-desc");
+  const [outsideSessionSort, setOutsideSessionSort] = useState("started-desc");
+  const [blockedAttemptSort, setBlockedAttemptSort] = useState("attempted-desc");
 
   useEffect(() => {
     settingsApi
@@ -4473,6 +5139,115 @@ function AdminSessionsPage() {
   const activeSessions = sessions.filter((session) => session.status === "Active");
   const endedSessions = sessions.filter((session) => session.status === "Ended");
   const uniqueIps = new Set(sessions.map((session) => session.clientIp)).size;
+  const sessionUserOptions = useMemo(() => buildValueHelpOptions(sessions.map((session) => session.userName), "User"), [sessions]);
+  const sessionRoleOptions = useMemo(() => buildValueHelpOptions(sessions.map((session) => session.userRole), "Role"), [sessions]);
+  const sessionStatusOptions = useMemo(() => buildValueHelpOptions(sessions.map((session) => session.status), "Status"), [sessions]);
+  const sessionIpOptions = useMemo(() => buildValueHelpOptions(sessions.map((session) => session.clientIp), "IP"), [sessions]);
+  const sessionSortOptions = useMemo(
+    () => [
+      { value: "started-desc", label: "Latest started first", meta: "Sort" },
+      { value: "user-asc", label: "User A-Z", meta: "Sort" },
+      { value: "role-asc", label: "Role A-Z", meta: "Sort" },
+      { value: "duration-desc", label: "Longest duration first", meta: "Sort" },
+      { value: "idle-desc", label: "Highest idle first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredSessions = useMemo(
+    () =>
+      sessions.filter((session) => (
+        matchesValueHelpFilter(sessionUserFilter, session.userName || undefined) &&
+        matchesValueHelpFilter(sessionRoleFilter, session.userRole || undefined) &&
+        matchesValueHelpFilter(sessionStatusFilter, session.status) &&
+        matchesValueHelpFilter(sessionIpFilter, session.clientIp)
+      )),
+    [sessionIpFilter, sessionRoleFilter, sessionStatusFilter, sessionUserFilter, sessions],
+  );
+  const sortedSessions = useMemo(() => {
+    const next = [...filteredSessions];
+    next.sort((left, right) => {
+      switch (sessionSort) {
+        case "user-asc":
+          return compareText(left.userName, right.userName);
+        case "role-asc":
+          return compareText(left.userRole, right.userRole) || compareText(left.userName, right.userName);
+        case "duration-desc":
+          return compareNumber(right.durationSeconds, left.durationSeconds) || compareText(left.userName, right.userName);
+        case "idle-desc":
+          return compareNumber(right.idleSeconds, left.idleSeconds) || compareText(left.userName, right.userName);
+        case "started-desc":
+        default:
+          return compareDateValue(right.startedAt, left.startedAt) || compareText(left.userName, right.userName);
+      }
+    });
+    return next;
+  }, [filteredSessions, sessionSort]);
+  const outsideUserOptions = useMemo(() => buildValueHelpOptions(outsideHoursSessions.map((session) => session.userName), "User"), [outsideHoursSessions]);
+  const outsideIpOptions = useMemo(() => buildValueHelpOptions(outsideHoursSessions.map((session) => session.clientIp), "IP"), [outsideHoursSessions]);
+  const outsideSessionSortOptions = useMemo(
+    () => [
+      { value: "started-desc", label: "Latest started first", meta: "Sort" },
+      { value: "user-asc", label: "User A-Z", meta: "Sort" },
+      { value: "duration-desc", label: "Longest duration first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredOutsideSessions = useMemo(
+    () =>
+      outsideHoursSessions.filter((session) => (
+        matchesValueHelpFilter(outsideUserFilter, session.userName || undefined) &&
+        matchesValueHelpFilter(outsideIpFilter, session.clientIp)
+      )),
+    [outsideHoursSessions, outsideIpFilter, outsideUserFilter],
+  );
+  const sortedOutsideSessions = useMemo(() => {
+    const next = [...filteredOutsideSessions];
+    next.sort((left, right) => {
+      switch (outsideSessionSort) {
+        case "user-asc":
+          return compareText(left.userName, right.userName);
+        case "duration-desc":
+          return compareNumber(right.durationSeconds, left.durationSeconds) || compareText(left.userName, right.userName);
+        case "started-desc":
+        default:
+          return compareDateValue(right.startedAt, left.startedAt) || compareText(left.userName, right.userName);
+      }
+    });
+    return next;
+  }, [filteredOutsideSessions, outsideSessionSort]);
+  const blockedUserOptions = useMemo(() => buildValueHelpOptions(outsideHoursAttempts.map((attempt) => attempt.userName), "User"), [outsideHoursAttempts]);
+  const blockedIpOptions = useMemo(() => buildValueHelpOptions(outsideHoursAttempts.map((attempt) => attempt.clientIp), "IP"), [outsideHoursAttempts]);
+  const blockedAttemptSortOptions = useMemo(
+    () => [
+      { value: "attempted-desc", label: "Latest attempted first", meta: "Sort" },
+      { value: "user-asc", label: "User A-Z", meta: "Sort" },
+      { value: "ip-asc", label: "IP A-Z", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredBlockedAttempts = useMemo(
+    () =>
+      outsideHoursAttempts.filter((attempt) => (
+        matchesValueHelpFilter(blockedUserFilter, attempt.userName || undefined) &&
+        matchesValueHelpFilter(blockedIpFilter, attempt.clientIp)
+      )),
+    [blockedIpFilter, blockedUserFilter, outsideHoursAttempts],
+  );
+  const sortedBlockedAttempts = useMemo(() => {
+    const next = [...filteredBlockedAttempts];
+    next.sort((left, right) => {
+      switch (blockedAttemptSort) {
+        case "user-asc":
+          return compareText(left.userName, right.userName);
+        case "ip-asc":
+          return compareText(left.clientIp, right.clientIp);
+        case "attempted-desc":
+        default:
+          return compareDateValue(right.occurredAt, left.occurredAt) || compareText(left.userName, right.userName);
+      }
+    });
+    return next;
+  }, [blockedAttemptSort, filteredBlockedAttempts]);
 
   return (
     <div className="space-y-6">
@@ -4534,47 +5309,80 @@ function AdminSessionsPage() {
                 <div className="mt-6 grid gap-6 xl:grid-cols-2">
                   <div className="space-y-4">
                     <div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div>
-                    {outsideHoursSessions.map((session) => (
-                      <div key={`outside-session-${session.sessionId}`} className="rounded-[28px] border border-amber-200 bg-amber-50/60 p-5">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
-                            <div className="mt-1 text-sm text-slate-500">{session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}</div>
-                          </div>
-                          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">Flagged</div>
-                        </div>
-                        <div className="mt-4 grid gap-3 md:grid-cols-2">
-                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div></div>
-                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div></div>
-                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</div><div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div></div>
-                          <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device / browser</div><div className="mt-2 text-sm text-slate-900">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div><div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div></div>
-                        </div>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={outsideUserOptions} value={outsideUserFilter} onChange={setOutsideUserFilter} containerClassName="w-full" />
+                      <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={outsideSessionSortOptions} value={outsideSessionSort} onChange={setOutsideSessionSort} containerClassName="w-full" clearLabel="Latest started first" clearDescription="Reset to the default sort order" />
+                      <div className="flex items-end gap-3">
+                        <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={outsideIpOptions} value={outsideIpFilter} onChange={setOutsideIpFilter} containerClassName="w-full" />
+                        <button type="button" onClick={() => { setOutsideUserFilter(""); setOutsideIpFilter(""); setOutsideSessionSort("started-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
                       </div>
-                    ))}
-                    {!outsideHoursSessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records currently fall outside business hours.</div> : null}
+                    </div>
+                    <div className="overflow-hidden rounded-[28px] border border-amber-200">
+                      <table className="min-w-full divide-y divide-amber-100">
+                        <thead className="bg-amber-50">
+                          <tr className="text-left text-sm text-slate-500">
+                            <th className="px-4 py-3 font-medium">User</th>
+                            <th className="px-4 py-3 font-medium">Role</th>
+                            <th className="px-4 py-3 font-medium">IP</th>
+                            <th className="px-4 py-3 font-medium">Started</th>
+                            <th className="px-4 py-3 font-medium">Duration</th>
+                            <th className="px-4 py-3 font-medium">Device</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-amber-100 bg-white text-sm">
+                          {sortedOutsideSessions.map((session) => (
+                            <tr key={`outside-session-${session.sessionId}`}>
+                              <td className="px-4 py-4 font-medium text-slate-900">{session.userName || "Unknown user"}</td>
+                              <td className="px-4 py-4 text-slate-600">{session.userRole || "Unknown role"}</td>
+                              <td className="px-4 py-4 font-mono text-slate-600">{session.clientIp}</td>
+                              <td className="px-4 py-4 text-slate-600">{formatDateTime(session.startedAt)}</td>
+                              <td className="px-4 py-4 text-slate-600">{formatDuration(session.durationSeconds)}</td>
+                              <td className="px-4 py-4 text-slate-600">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</td>
+                            </tr>
+                          ))}
+                          {!sortedOutsideSessions.length ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No outside-hours sessions matched the current filters.</td></tr> : null}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
                   <div className="space-y-4">
                     <div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div>
-                    {outsideHoursAttempts.map((attempt) => (
-                      <div key={`outside-attempt-${attempt.id}`} className="rounded-[28px] border border-rose-200 bg-rose-50/60 p-5">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <div className="text-lg font-semibold text-slate-950">{attempt.userName || "Unknown user"}</div>
-                            <div className="mt-1 text-sm text-slate-500">{attempt.userRole || "Unknown role"}</div>
-                          </div>
-                          <div className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-800">Blocked</div>
-                        </div>
-                        <div className="mt-4 grid gap-3 md:grid-cols-2">
-                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP</div><div className="mt-2 font-mono text-sm text-slate-900">{attempt.clientIp}</div></div>
-                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Attempt time</div><div className="mt-2 text-sm text-slate-900">{formatDateTime(attempt.occurredAt)}</div></div>
-                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Device</div><div className="mt-2 text-sm text-slate-900">{attempt.device || "Unknown device"}</div></div>
-                          <div className="rounded-2xl border border-rose-200 bg-white px-4 py-3"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Browser</div><div className="mt-2 text-sm text-slate-900">{attempt.browser || "Unknown browser"}</div></div>
-                        </div>
-                        <div className="mt-3 text-xs text-slate-500 break-all">{attempt.userAgent || "User agent not available"}</div>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={blockedUserOptions} value={blockedUserFilter} onChange={setBlockedUserFilter} containerClassName="w-full" />
+                      <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={blockedAttemptSortOptions} value={blockedAttemptSort} onChange={setBlockedAttemptSort} containerClassName="w-full" clearLabel="Latest attempted first" clearDescription="Reset to the default sort order" />
+                      <div className="flex items-end gap-3">
+                        <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={blockedIpOptions} value={blockedIpFilter} onChange={setBlockedIpFilter} containerClassName="w-full" />
+                        <button type="button" onClick={() => { setBlockedUserFilter(""); setBlockedIpFilter(""); setBlockedAttemptSort("attempted-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
                       </div>
-                    ))}
-                    {!outsideHoursAttempts.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No blocked outside-hours attempts have been captured yet.</div> : null}
+                    </div>
+                    <div className="overflow-hidden rounded-[28px] border border-rose-200">
+                      <table className="min-w-full divide-y divide-rose-100">
+                        <thead className="bg-rose-50">
+                          <tr className="text-left text-sm text-slate-500">
+                            <th className="px-4 py-3 font-medium">User</th>
+                            <th className="px-4 py-3 font-medium">Role</th>
+                            <th className="px-4 py-3 font-medium">IP</th>
+                            <th className="px-4 py-3 font-medium">Attempted</th>
+                            <th className="px-4 py-3 font-medium">Device</th>
+                            <th className="px-4 py-3 font-medium">Browser</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 bg-white text-sm">
+                          {sortedBlockedAttempts.map((attempt) => (
+                            <tr key={`outside-attempt-${attempt.id}`}>
+                              <td className="px-4 py-4 font-medium text-slate-900">{attempt.userName || "Unknown user"}</td>
+                              <td className="px-4 py-4 text-slate-600">{attempt.userRole || "Unknown role"}</td>
+                              <td className="px-4 py-4 font-mono text-slate-600">{attempt.clientIp}</td>
+                              <td className="px-4 py-4 text-slate-600">{formatDateTime(attempt.occurredAt)}</td>
+                              <td className="px-4 py-4 text-slate-600">{attempt.device || "Unknown device"}</td>
+                              <td className="px-4 py-4 text-slate-600">{attempt.browser || "Unknown browser"}</td>
+                            </tr>
+                          ))}
+                          {!sortedBlockedAttempts.length ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No blocked attempts matched the current filters.</td></tr> : null}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </>
@@ -4595,63 +5403,54 @@ function AdminSessionsPage() {
               <MetricCard label="Observed IPs" value={uniqueIps} hint="Distinct network origins across the current session inventory." icon={Network} tone="amber" />
             </div>
 
-            <div className="mt-6 space-y-4">
-              {sessions.map((session) => (
-                <div key={session.sessionId} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_14px_32px_rgba(15,23,42,0.05)]">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <div className="text-lg font-semibold text-slate-950">{session.userName || "Unknown user"}</div>
-                      <div className="mt-1 text-sm text-slate-500">
-                        {session.userRole || "Unknown role"}{session.userEmail ? ` • ${session.userEmail}` : ""}
-                      </div>
-                    </div>
-                    <div className={`rounded-full px-3 py-1 text-xs font-medium ${session.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                      {session.status}
-                    </div>
-                  </div>
+            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={sessionUserOptions} value={sessionUserFilter} onChange={setSessionUserFilter} containerClassName="w-full" />
+              <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={sessionRoleOptions} value={sessionRoleFilter} onChange={setSessionRoleFilter} containerClassName="w-full" />
+              <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={sessionStatusOptions} value={sessionStatusFilter} onChange={setSessionStatusFilter} containerClassName="w-full" />
+              <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={sessionIpOptions} value={sessionIpFilter} onChange={setSessionIpFilter} containerClassName="w-full" />
+              <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={sessionSortOptions} value={sessionSort} onChange={setSessionSort} containerClassName="w-full" clearLabel="Latest started first" clearDescription="Reset to the default sort order" />
+              <div className="flex items-end">
+                <button type="button" onClick={() => { setSessionUserFilter(""); setSessionRoleFilter(""); setSessionStatusFilter(""); setSessionIpFilter(""); setSessionSort("started-desc"); }} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear session filters</button>
+              </div>
+            </div>
 
-                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">IP address</div>
-                      <div className="mt-2 font-mono text-sm text-slate-900">{session.clientIp}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Login time</div>
-                      <div className="mt-2 text-sm text-slate-900">{formatDateTime(session.startedAt)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Logout time</div>
-                      <div className="mt-2 text-sm text-slate-900">{session.endedAt ? formatDateTime(session.endedAt) : "Still active"}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Session duration</div>
-                      <div className="mt-2 text-sm text-slate-900">{formatDuration(session.durationSeconds)}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Last seen</div>
-                      <div className="mt-2 text-sm text-slate-900">{formatDateTime(session.lastSeenAt)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Idle time</div>
-                      <div className="mt-2 text-sm text-slate-900">{session.status === "Active" ? formatDuration(session.idleSeconds) : "-"}</div>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:col-span-2">
-                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Close reason / device</div>
-                      <div className="mt-2 text-sm text-slate-900">
-                        {session.revokedReason ? `Ended because ${session.revokedReason.replace(/_/g, " ")}.` : "No forced close reason recorded."}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</div>
-                      <div className="mt-1 text-xs text-slate-500 break-all">{session.userAgent || "User agent not available"}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 text-xs text-slate-400">Session ID: {session.sessionId}</div>
-                </div>
-              ))}
-              {!sessions.length ? <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No session records are available yet.</div> : null}
+            <div className="mt-6 overflow-hidden rounded-[28px] border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr className="text-left text-sm text-slate-500">
+                    <th className="px-4 py-3 font-medium">User</th>
+                    <th className="px-4 py-3 font-medium">Role</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">IP</th>
+                    <th className="px-4 py-3 font-medium">Started</th>
+                    <th className="px-4 py-3 font-medium">Last seen</th>
+                    <th className="px-4 py-3 font-medium">Duration</th>
+                    <th className="px-4 py-3 font-medium">Idle</th>
+                    <th className="px-4 py-3 font-medium">Device</th>
+                    <th className="px-4 py-3 font-medium">Session ID</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                  {sortedSessions.map((session) => (
+                    <tr key={session.sessionId}>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-slate-900">{session.userName || "Unknown user"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{session.userEmail || "-"}</div>
+                      </td>
+                      <td className="px-4 py-4 text-slate-600">{session.userRole || "Unknown role"}</td>
+                      <td className="px-4 py-4 text-slate-600">{session.status}</td>
+                      <td className="px-4 py-4 font-mono text-slate-600">{session.clientIp}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDateTime(session.startedAt)}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDateTime(session.lastSeenAt)}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDuration(session.durationSeconds)}</td>
+                      <td className="px-4 py-4 text-slate-600">{session.status === "Active" ? formatDuration(session.idleSeconds) : "-"}</td>
+                      <td className="px-4 py-4 text-slate-600">{session.device || "Unknown device"} • {session.browser || "Unknown browser"}</td>
+                      <td className="px-4 py-4 font-mono text-xs text-slate-500">{session.sessionId}</td>
+                    </tr>
+                  ))}
+                  {!sortedSessions.length ? <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500">No session records matched the current filters.</td></tr> : null}
+                </tbody>
+              </table>
             </div>
           </>
         ) : null}

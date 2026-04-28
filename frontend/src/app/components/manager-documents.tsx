@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import {
-  Filter, Eye, Download, Trash2, X, ChevronDown,
+  Eye, Download, Trash2, X,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
+import { ValueHelp } from "./ui/value-help";
 
 interface ManagerDocumentsProps {
   mine?: boolean;
@@ -23,7 +24,21 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
   const [filterPlant, setFilterPlant] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const searchOptions = Array.from(new Set(documents.map((document) => document.name).filter((value) => value.trim()))).sort((a, b) => a.localeCompare(b));
+  const searchOptions = useMemo(
+    () =>
+      Array.from(new Set(documents.map((document) => document.name).filter((value) => value.trim())))
+        .sort((a, b) => a.localeCompare(b))
+        .map((option) => ({ value: option, label: option, meta: "Document" })),
+    [documents],
+  );
+  const categoryValueHelpOptions = useMemo(
+    () => categoryOptions.map((category) => ({ value: category, label: category, meta: "Category" })),
+    [],
+  );
+  const plantValueHelpOptions = useMemo(
+    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    [plants],
+  );
 
   async function load(options?: { keepCurrentSelection?: boolean }) {
     const [docsResult, plantsResult] = await Promise.all([
@@ -145,52 +160,39 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
       </div>
 
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-xs">
-          <select
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="">All documents</option>
-            {searchOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="All documents"
+          emptyLabel="No matching documents."
+          options={searchOptions}
+          value={search}
+          onChange={setSearch}
+          containerClassName="min-w-[200px] max-w-xs flex-1"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
-        <div className="relative">
-          <Filter size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#999]" />
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="h-9 pl-8 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-            style={{ fontSize: 13 }}
-          >
-            <option value="">All Categories</option>
-            {categoryOptions.map((category) => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
-          <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-        </div>
+        <ValueHelp
+          placeholder="All categories"
+          emptyLabel="No matching categories."
+          options={categoryValueHelpOptions}
+          value={filterCategory}
+          onChange={setFilterCategory}
+          containerClassName="min-w-[180px]"
+          triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+          popoverClassName="border-[#d9d9d9]"
+        />
 
         {!mine && (
-          <div className="relative">
-            <select
-              value={filterPlant}
-              onChange={(e) => setFilterPlant(e.target.value)}
-              className="h-9 px-3 pr-8 border border-[#d9d9d9] bg-white text-[#333] focus:border-[#0A6ED1] focus:outline-none appearance-none cursor-pointer"
-              style={{ fontSize: 13 }}
-            >
-              <option value="">All Plants</option>
-              {plants.map((plant) => (
-                <option key={plant.id} value={plant.id}>{plant.name}</option>
-              ))}
-            </select>
-            <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] pointer-events-none" />
-          </div>
+          <ValueHelp
+            placeholder="All plants"
+            emptyLabel="No matching plants."
+            options={plantValueHelpOptions}
+            value={filterPlant}
+            onChange={setFilterPlant}
+            containerClassName="min-w-[180px]"
+            triggerClassName="h-9 rounded-md border-[#d9d9d9] px-3 text-[#333] focus-visible:border-[#0A6ED1] focus-visible:ring-[#0A6ED1]/10"
+            popoverClassName="border-[#d9d9d9]"
+          />
         )}
 
         {hasFilter && (
