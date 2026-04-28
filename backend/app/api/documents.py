@@ -292,6 +292,15 @@ def _can_view_document(user: dict, document: dict) -> bool:
     return document.get("plant_id") in assigned and document.get("uploaded_by_id") == user["id"]
 
 
+def _can_download_document(user: dict, document: dict) -> bool:
+    if user["role"] == "CEO":
+        return True
+    if user["role"] == "Admin":
+        return False
+    assigned = user.get("assigned_plant_ids") or ([user["plant_id"]] if user.get("plant_id") else [])
+    return document.get("plant_id") in assigned and document.get("uploaded_by_id") == user["id"]
+
+
 def _validate_uploaded_file(file) -> tuple[str, str] | None:
     file_name = secure_filename(file.filename or "")
     extension = Path(file_name).suffix.lstrip(".").lower()
@@ -929,7 +938,7 @@ def download_document(document_id: str):
     if not document:
         _log_document_event("warning", "Document download failed", **_user_log_context(user), documentId=document_id, reason="not_found")
         return error_response("Document not found", 404)
-    if not _can_view_document(user, document):
+    if not _can_download_document(user, document):
         return error_response("You do not have permission to download this document", 403)
     if not document.get("file_storage_id"):
         _log_document_event(
@@ -968,6 +977,43 @@ def download_document(document_id: str):
         stream,
         download_name=document.get("file_name") or f"{document_id}.bin",
         as_attachment=True,
+        mimetype=document.get("content_type") or "application/octet-stream",
+    )
+
+
+@documents_bp.get("/documents/<document_id>/view")
+@require_auth()
+def view_document_file(document_id: str):
+    db = get_db()
+    user = current_user()
+    _log_document_event("info", "Document view requested", **_user_log_context(user), documentId=document_id)
+    document = db.documents.find_one({"id": document_id, "deleted_at": None})
+    if not document:
+        return error_response("Document not found", 404)
+    if not _can_view_document(user, document):
+        return error_response("You do not have permission to view this document", 403)
+    if not document.get("file_storage_id"):
+        return error_response("No file is attached to this document", 404)
+
+    _mark_document_accessed(document_id, user, mode="view")
+    stream = io.BytesIO()
+    get_fs().download_to_stream(document["file_storage_id"], stream)
+    stream.seek(0)
+    _record_activity(
+        "Viewed Original",
+        document,
+        user,
+        {
+            "fileName": document.get("file_name"),
+            "contentType": document.get("content_type"),
+            "sizeBytes": document.get("size_bytes"),
+        },
+    )
+    record_audit_event("Document Original Viewed", user=user, resource_type="document", resource_id=document_id)
+    return send_file(
+        stream,
+        download_name=document.get("file_name") or f"{document_id}.bin",
+        as_attachment=False,
         mimetype=document.get("content_type") or "application/octet-stream",
     )
 

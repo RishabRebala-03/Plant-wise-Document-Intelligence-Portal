@@ -3,6 +3,7 @@ import { X, Save, Lock, Globe, MessageSquare, Download } from "lucide-react";
 import { categoryOptions } from "../lib/api";
 import type { Comment, DocumentRecord } from "../lib/types";
 import { documentsApi } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 interface DocumentDrawerProps {
   doc: DocumentRecord;
@@ -30,6 +31,7 @@ export function DocumentDrawer({
   onUpdateDocument,
   autoStartEdit = false,
 }: DocumentDrawerProps) {
+  const { user } = useAuth();
   const [commentText, setCommentText] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [saving, setSaving] = useState(false);
@@ -51,6 +53,7 @@ export function DocumentDrawer({
   const showCommentComposer = Boolean(onAddComment);
   const hasAttachedFile = Boolean(doc.file?.storageId);
   const showUpdateForm = Boolean(onUpdateDocument);
+  const canDownload = user?.role === "CEO" || (user?.role === "Mining Manager" && doc.uploadedById === user.id);
   const detailRows = [
     ["Document ID", doc.id],
     ["Document Name", doc.name],
@@ -58,14 +61,16 @@ export function DocumentDrawer({
     ["Plant", doc.plant],
     ["Plant ID", doc.plantId],
     ["Category", doc.category],
+    ["Status", doc.status],
     ["Uploaded By", doc.uploadedBy],
-    ["Upload Date", doc.date || "-"],
+    ["Upload Date", doc.date ? new Date(doc.date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "-"],
+    ["Upload Time", doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : (doc.date ? new Date(doc.date).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "-")],
     ["Version", `v${doc.version}`],
     ["Original File", fileName || doc.file?.name || "Not attached"],
     ["File Type", doc.file?.contentType || "Not available"],
     ["File Size", formatFileSize(doc.file?.sizeBytes)],
-    ["Created At", doc.createdAt || "-"],
-    ["Last Updated", doc.updatedAt || "-"],
+    ["Created At", doc.createdAt ? new Date(doc.createdAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "-"],
+    ["Last Updated", doc.updatedAt ? new Date(doc.updatedAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "-"],
   ];
 
   useEffect(() => {
@@ -180,7 +185,7 @@ export function DocumentDrawer({
                         <th>Plant</th>
                         <th>Version</th>
                         <th>Uploaded By</th>
-                        <th>Upload Date</th>
+                        <th>Uploaded At</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -190,7 +195,7 @@ export function DocumentDrawer({
                         <td>{doc.plant}</td>
                         <td>v{doc.version}</td>
                         <td>{doc.uploadedBy}</td>
-                        <td>{doc.date || "Date unavailable"}</td>
+                        <td>{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : (doc.date || "Date unavailable")}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -207,7 +212,7 @@ export function DocumentDrawer({
                       The file preview is hidden here. Use the actions below to open or download the original upload.
                     </p>
                   </div>
-                  {hasAttachedFile && (
+                  {hasAttachedFile && canDownload && (
                     <button
                       onClick={() => void handleDownload()}
                       className="inline-flex h-10 items-center gap-2 rounded-full border border-[#d6e1ee] bg-[#f8fbff] px-4 text-[#27415e] transition hover:border-[#b8cadf] hover:bg-[#eef5fc] cursor-pointer"
@@ -217,6 +222,11 @@ export function DocumentDrawer({
                     </button>
                   )}
                 </div>
+                {hasAttachedFile && !canDownload ? (
+                  <div className="mt-4 rounded-2xl border border-[#dce4f0] bg-[#f8fbff] px-4 py-3 text-[#425466]" style={{ fontSize: 12 }}>
+                    Downloads are restricted. CEOs have full access, and managers can only download documents they uploaded themselves.
+                  </div>
+                ) : null}
                 {fileError && (
                   <div className="mt-4 rounded-2xl border border-[#f0c4c4] bg-[#fff5f5] px-4 py-3 text-[#BB0000]" style={{ fontSize: 12 }}>
                     {fileError}

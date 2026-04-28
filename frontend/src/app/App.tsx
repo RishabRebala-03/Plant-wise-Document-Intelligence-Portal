@@ -242,6 +242,28 @@ function compareDateValue(a?: string | null, b?: string | null) {
   return (a || "").localeCompare(b || "");
 }
 
+function canPreviewInBrowser(fileName?: string | null, contentType?: string | null) {
+  const normalizedType = (contentType || "").toLowerCase();
+  if (
+    normalizedType.startsWith("image/")
+    || normalizedType === "application/pdf"
+    || normalizedType.startsWith("text/")
+    || normalizedType.includes("json")
+  ) {
+    return true;
+  }
+
+  const extension = (fileName || "").split(".").pop()?.toLowerCase() || "";
+  return ["pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "txt", "csv", "json"].includes(extension);
+}
+
+function previewSource(url: string, contentType?: string | null) {
+  if ((contentType || "").toLowerCase() === "application/pdf") {
+    return `${url}#toolbar=0&navpanes=0&scrollbar=0`;
+  }
+  return url;
+}
+
 function normalizeGovernancePolicy(policy: GovernancePolicy): GovernancePolicy {
   const uniqueFormats = Array.from(new Set(policy.allowedUploadFormats.map((value) => value.toLowerCase())));
   const uniqueDays = Array.from(new Set(policy.businessHours.allowedDays)).sort((a, b) => a - b);
@@ -2037,6 +2059,10 @@ function DocumentDetailPage() {
   const [commentText, setCommentText] = useState("");
   const [commentVisibility, setCommentVisibility] = useState<"private" | "public">("private");
   const [commentSaving, setCommentSaving] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewContentType, setPreviewContentType] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const document = documents.find((item) => item.id === documentId);
 
   useEffect(() => {
@@ -2055,6 +2081,10 @@ function DocumentDetailPage() {
       markDocumentLocked(documentId);
     }
   }, [documentId, markDocumentLocked, user.role]);
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   async function handleAddComment() {
     if (!documentId || !commentText.trim() || user.role !== "CEO") return;
@@ -2105,7 +2135,28 @@ function DocumentDetailPage() {
     }
   }
 
+  async function handleOpenPreview() {
+    if (!documentId) return;
+    setPreviewLoading(true);
+    setPreviewError("");
+    try {
+      const { blob, contentType } = await documentsApi.viewFile(documentId);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const nextUrl = URL.createObjectURL(blob);
+      setPreviewUrl(nextUrl);
+      setPreviewContentType(contentType || blob.type || "application/octet-stream");
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : "Unable to open the original file.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   if (!document) return <NotFoundCard title="Document not found" body="This document is no longer available in the current filtered workspace." />;
+
+  const canDownloadOriginal = user.role === "CEO" || (user.role === "Mining Manager" && document.uploadedById === user.id);
+  const canViewOriginal = canDownloadOriginal;
+  const previewSupported = canPreviewInBrowser(document.file?.name, document.file?.contentType);
 
   const mentionCandidates = users.filter((candidate) => candidate.id !== user.id);
   const conversationAudienceLabels: Record<"workspace" | "executive" | "uploader", string> = {
@@ -2171,21 +2222,64 @@ function DocumentDetailPage() {
             <DetailRow label="Manager" value={document.managerName} />
             <DetailRow label="Uploaded by" value={document.uploadedBy} />
             <DetailRow label="Upload date" value={formatDate(document.date)} />
+            <DetailRow label="Upload time" value={formatDateTime(document.uploadedAt || document.date)} />
             <DetailRow label="Version" value={`v${document.version}`} />
+            <DetailRow label="Status" value={document.status} />
+            <DetailRow label="Company" value={document.company || "Midwest Ltd"} />
             <DetailRow label="File" value={document.file?.name || "Not attached"} />
+            <DetailRow label="Created at" value={formatDateTime(document.createdAt)} />
+            <DetailRow label="Last updated" value={formatDateTime(document.updatedAt)} />
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
-            {document.file?.storageId ? (
-              <button onClick={() => void documentsApi.openFileInNewTab(document.id)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            {document.file?.storageId && canViewOriginal ? (
+              <button onClick={() => void handleOpenPreview()} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
                 Open original file
               </button>
             ) : null}
-            {document.file?.storageId ? (
-              <button onClick={() => void documentsApi.downloadFile(document.id)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+            {document.file?.storageId && canDownloadOriginal ? (
+              <button onClick={() => void documentsApi.saveDownloadedFile(document.id)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                 Prepare download
               </button>
             ) : null}
           </div>
+          {document.file?.storageId && !canDownloadOriginal ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Downloads are restricted. CEOs have full access, and managers can only download documents they uploaded themselves.
+            </div>
+          ) : null}
+          {previewLoading ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Opening document preview...
+            </div>
+          ) : null}
+          {previewError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {previewError}
+            </div>
+          ) : null}
+          {previewUrl && previewSupported ? (
+            <div className="mt-6 overflow-hidden rounded-[24px] border border-slate-200 bg-slate-50">
+              <div className="border-b border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700">
+                In-app file preview
+              </div>
+              {previewContentType.startsWith("image/") ? (
+                <div className="bg-slate-100 p-4">
+                  <img src={previewUrl} alt={document.name} className="mx-auto max-h-[70vh] rounded-xl object-contain" />
+                </div>
+              ) : (
+                <iframe
+                  src={previewSource(previewUrl, previewContentType)}
+                  title={`${document.name} preview`}
+                  className="h-[70vh] w-full bg-white"
+                />
+              )}
+            </div>
+          ) : null}
+          {previewUrl && !previewSupported ? (
+            <div className="mt-6 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
+              This file type cannot be previewed in-app. Use `Prepare download` to access the original file.
+            </div>
+          ) : null}
         </SectionCard>
 
         <SectionCard title="Notes and access state" subtitle="Comments plus reviewer signals">
@@ -4420,6 +4514,33 @@ function ManagerOversightPage() {
     }
   }
 
+  async function resetManagerPassword(target: User) {
+    const nextPassword = window.prompt(`Enter a temporary password for ${target.name}. It must be at least 8 characters long.`);
+    if (nextPassword === null) return;
+    const trimmed = nextPassword.trim();
+    if (trimmed.length < 8) {
+      setError("Temporary password must be at least 8 characters long.");
+      setMessage("");
+      return;
+    }
+
+    setSubmitting(target.id);
+    setError("");
+    setMessage("");
+    try {
+      await usersApi.resetPassword(target.id, {
+        newPassword: trimmed,
+        confirmPassword: trimmed,
+      });
+      setMessage(`Temporary password reset for ${target.name}.`);
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to reset password.");
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
   async function removeManager(target: User) {
     const confirmed = window.confirm(`Remove ${target.name} from the platform? This cannot be undone.`);
     if (!confirmed) return;
@@ -4552,14 +4673,14 @@ function ManagerOversightPage() {
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
               {sortedManagers.map((candidate) => (
                 <tr key={candidate.id}>
-                  <td className="px-4 py-4">
+                  <td className="px-4 py-4 align-top">
                     <button
                       onClick={() => navigate(user.role === "Admin" ? `/admin/users/${candidate.id}` : `/oversight/${candidate.id}`)}
-                      className="font-semibold text-slate-900 transition hover:text-[#0A6ED1]"
+                      className="block text-left font-semibold leading-5 text-slate-900 transition hover:text-[#0A6ED1]"
                     >
                       {candidate.name}
                     </button>
-                    <div className="mt-1 text-xs text-slate-500">{candidate.id}</div>
+                    <div className="mt-1 break-all text-xs text-slate-500">{candidate.id}</div>
                   </td>
                   <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
                   <td className="px-4 py-4 text-slate-600">{candidate.status}</td>
@@ -4583,6 +4704,15 @@ function ManagerOversightPage() {
                       >
                         {candidate.status === "Active" ? "Mark inactive" : "Reactivate"}
                       </button>
+                      {user.role === "Admin" ? (
+                        <button
+                          onClick={() => void resetManagerPassword(candidate)}
+                          disabled={submitting === candidate.id}
+                          className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
+                        >
+                          Reset password
+                        </button>
+                      ) : null}
                       <button
                         onClick={() => void removeManager(candidate)}
                         disabled={submitting === candidate.id}
@@ -4840,6 +4970,43 @@ function AccessToggle({ label, checked, disabled = false, onChange }: { label: s
       <span>{label}</span>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-teal-600" />
     </label>
+  );
+}
+
+function RuleStatusToggle({
+  value,
+  disabled = false,
+  onChange,
+}: {
+  value: IpRule["status"];
+  disabled?: boolean;
+  onChange: (status: IpRule["status"]) => void;
+}) {
+  const actions: Array<{ value: IpRule["status"]; label: string; activeClass: string }> = [
+    { value: "Allowed", label: "Allow", activeClass: "bg-emerald-600 text-white border-emerald-600" },
+    { value: "Blocked", label: "Block", activeClass: "bg-rose-600 text-white border-rose-600" },
+    { value: "Review", label: "Review", activeClass: "bg-amber-500 text-white border-amber-500" },
+  ];
+
+  return (
+    <div className={`inline-flex flex-wrap gap-2 ${disabled ? "opacity-60" : ""}`}>
+      {actions.map((action) => {
+        const active = value === action.value;
+        return (
+          <button
+            key={action.value}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(action.value)}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+              active ? action.activeClass : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {action.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -5190,11 +5357,10 @@ function AdminNetworkPage() {
           <div className="mb-5 grid gap-3 rounded-[28px] border border-slate-200 bg-slate-50 p-5 md:grid-cols-4">
             <input value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder="Label" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
             <input value={draft.address} onChange={(event) => setDraft((current) => ({ ...current, address: event.target.value }))} placeholder="IP address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as IpRule["status"] }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="Allowed">Allowed</option>
-              <option value="Blocked">Blocked</option>
-              <option value="Review">Review</option>
-            </select>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Status</div>
+              <RuleStatusToggle value={draft.status} onChange={(status) => setDraft((current) => ({ ...current, status }))} />
+            </div>
             <button onClick={() => void createRule()} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">Save IP</button>
           </div>
         ) : null}
@@ -5260,14 +5426,20 @@ function AdminNetworkPage() {
                 <tr key={rule.id}>
                   <td className="px-4 py-4 font-medium text-slate-900">{rule.label}</td>
                   <td className="px-4 py-4 font-mono text-slate-600">{rule.address}</td>
-                  <td className="px-4 py-4 text-slate-600">{rule.status}</td>
+                  <td className="px-4 py-4">
+                    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                      rule.status === "Allowed"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : rule.status === "Blocked"
+                          ? "bg-rose-50 text-rose-700"
+                          : "bg-amber-50 text-amber-700"
+                    }`}>
+                      {rule.status}
+                    </span>
+                  </td>
                   <td className="px-4 py-4 text-slate-600">{formatDate(rule.lastUpdated)}</td>
                   <td className="px-4 py-4">
-                    <select value={rule.status} onChange={(event) => updateRule(rule.id, event.target.value as IpRule["status"])} className="h-10 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-teal-500">
-                      <option value="Allowed">Allowed</option>
-                      <option value="Blocked">Blocked</option>
-                      <option value="Review">Review</option>
-                    </select>
+                    <RuleStatusToggle value={rule.status} onChange={(status) => void updateRule(rule.id, status)} />
                   </td>
                 </tr>
               ))}

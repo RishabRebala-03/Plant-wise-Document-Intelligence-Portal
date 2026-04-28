@@ -224,6 +224,44 @@ def toggle_user_status(user_id: str):
     return success_response(serialize_user(updated))
 
 
+@users_bp.post("/users/<user_id>/reset-password")
+@require_auth(["Admin"])
+@require_capability("canManageUsers")
+def reset_user_password(user_id: str):
+    db = get_db()
+    target = db.users.find_one({"id": user_id})
+    if not target:
+        return error_response("User not found", 404)
+
+    actor = _current_user()
+    if target["id"] == actor["id"]:
+        return error_response("Use the profile security page to change your own password", 400)
+
+    body = parse_json_body()
+    new_password = (body.get("newPassword") or "").strip()
+    confirm_password = (body.get("confirmPassword") or "").strip()
+
+    if not new_password or len(new_password) < 8:
+        return error_response("Temporary password must be at least 8 characters long", 400)
+    if new_password != confirm_password:
+        return error_response("Password confirmation does not match", 400)
+
+    now = utc_now()
+    db.users.update_one(
+        {"id": user_id},
+        {
+            "$set": {
+                "password_hash": hash_password(new_password),
+                "security.last_password_change_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+    updated = db.users.find_one({"id": user_id})
+    _record_user_activity("User Password Reset", actor, updated)
+    return success_response(serialize_user(updated))
+
+
 @users_bp.delete("/users/<user_id>")
 @require_auth(["Admin", "CEO"])
 @require_capability("canManageUsers")

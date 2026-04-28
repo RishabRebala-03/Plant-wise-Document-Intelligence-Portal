@@ -297,10 +297,39 @@ export const documentsApi = {
     return apiFetchBlob(`/documents/${documentId}/download`);
   },
 
-  async openFileInNewTab(documentId: string) {
-    const { blob } = await apiFetchBlob(`/documents/${documentId}/download`);
+  viewFile(documentId: string) {
+    return apiFetchBlob(`/documents/${documentId}/view`);
+  },
+
+  async saveDownloadedFile(documentId: string) {
+    const { blob, fileName } = await apiFetchBlob(`/documents/${documentId}/download`);
     const url = URL.createObjectURL(blob);
-    window.open(url, "_blank", "noopener,noreferrer");
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName || `${documentId}.bin`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
+
+  async openFileInNewTab(documentId: string) {
+    const opened = window.open("", "_blank");
+    try {
+      const { blob } = await apiFetchBlob(`/documents/${documentId}/view`);
+      const url = URL.createObjectURL(blob);
+      if (opened) {
+        opened.location.href = url;
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      if (opened && !opened.closed) {
+        opened.close();
+      }
+      throw error;
+    }
   },
 
   async exportCsv() {
@@ -476,6 +505,13 @@ export const usersApi = {
   },
   toggleStatus(userId: string) {
     return apiFetch<User>(`/users/${userId}/toggle-status`, { method: "POST" });
+  },
+  resetPassword(userId: string, body: { newPassword: string; confirmPassword: string }) {
+    return apiFetch<User>(`/users/${userId}/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
   },
   remove(userId: string) {
     return apiFetch<{ message: string }>(`/users/${userId}`, { method: "DELETE" });

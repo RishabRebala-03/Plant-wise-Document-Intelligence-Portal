@@ -154,12 +154,15 @@ def _address_matches(rule_address: str, client_ip: str) -> bool:
         return rule_address.strip() == client_ip.strip()
 
 
-def evaluate_ip_rules(client_ip: str) -> tuple[bool, str | None]:
+def evaluate_ip_rules(client_ip: str, *, require_allowlist: bool = False) -> tuple[bool, str | None]:
     db = get_db()
+    allowed_rules = list(db.ip_rules.find({"status": "Allowed"}))
     blocked_rules = list(db.ip_rules.find({"status": "Blocked"}))
 
     if any(_address_matches(rule.get("address", ""), client_ip) for rule in blocked_rules):
         return False, "blocked"
+    if require_allowlist and not any(_address_matches(rule.get("address", ""), client_ip) for rule in allowed_rules):
+        return False, "not_whitelisted"
     return True, None
 
 

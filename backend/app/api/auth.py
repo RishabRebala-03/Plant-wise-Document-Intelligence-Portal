@@ -112,7 +112,7 @@ def login():
         )
         return error_response("Invalid credentials", 401)
     client_ip = _client_ip()
-    ip_allowed, ip_reason = evaluate_ip_rules(client_ip)
+    ip_allowed, ip_reason = evaluate_ip_rules(client_ip, require_allowlist=True)
     if not ip_allowed:
         record_audit_event(
             "Login Rejected",
