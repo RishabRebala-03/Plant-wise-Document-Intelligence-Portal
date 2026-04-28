@@ -696,6 +696,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
       const governance: NavItem[] = [];
       if (can("canManageUsers")) {
         governance.push({ label: "Manager Access", path: "/oversight", icon: UserCog, capability: "canManageUsers" });
+        governance.push({ label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" });
       }
       if (can("canConfigureIp")) {
         governance.push({ label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" });
@@ -1182,7 +1183,7 @@ function ManagerDashboardPage() {
         <MetricCard label="Upload Rights" value={can("canUploadDocuments") ? "Enabled" : "Disabled"} hint="Managers can upload only when the live access rule permits it." icon={Upload} tone="amber" onClick={can("canUploadDocuments") ? () => navigate("/upload") : undefined} />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <div className="grid gap-6">
         <div className="data-table-panel">
           <div className="data-table-toolbar">
             <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
@@ -3272,7 +3273,7 @@ function AdminTile({ title, body, to, icon: Icon }: { title: string; body: strin
 }
 
 function AdminMasterDataPage() {
-  const { users, plants, documents, refreshData } = usePortal();
+  const { user, users, plants, documents, refreshData } = usePortal();
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
@@ -3322,8 +3323,32 @@ function AdminMasterDataPage() {
     description: "",
     dueDate: "",
   });
+  const [activeMasterTab, setActiveMasterTab] = useState("records");
+  const [userFilter, setUserFilter] = useState("");
+  const [userRoleFilter, setUserRoleFilter] = useState("");
+  const [userScopeFilter, setUserScopeFilter] = useState("");
+  const [userEmailFilter, setUserEmailFilter] = useState("");
+  const [userStatusFilter, setUserStatusFilter] = useState("");
+  const [userSort, setUserSort] = useState("name-asc");
+  const [plantFilter, setPlantFilter] = useState("");
+  const [plantCompanyFilter, setPlantCompanyFilter] = useState("");
+  const [plantManagerFilter, setPlantManagerFilter] = useState("");
+  const [plantStatusFilter, setPlantStatusFilter] = useState("");
+  const [plantAddressFilter, setPlantAddressFilter] = useState("");
+  const [plantSort, setPlantSort] = useState("name-asc");
+  const [projectFilter, setProjectFilter] = useState("");
+  const [projectPlantFilter, setProjectPlantFilter] = useState("");
+  const [projectOwnerFilter, setProjectOwnerFilter] = useState("");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("");
+  const [projectCodeFilter, setProjectCodeFilter] = useState("");
+  const [projectSort, setProjectSort] = useState("created-desc");
+  const [documentNameFilter, setDocumentNameFilter] = useState("");
   const [documentPlantFilter, setDocumentPlantFilter] = useState("");
   const [documentProjectFilter, setDocumentProjectFilter] = useState("");
+  const [documentUploaderFilter, setDocumentUploaderFilter] = useState("");
+  const [documentCategoryFilter, setDocumentCategoryFilter] = useState("");
+  const [documentStatusFilter, setDocumentStatusFilter] = useState("");
+  const [documentSort, setDocumentSort] = useState("uploaded-desc");
 
   async function loadProjects() {
     setLoadingProjects(true);
@@ -3362,12 +3387,101 @@ function AdminMasterDataPage() {
   const filteredDocuments = useMemo(
     () =>
       documents.filter((document) => {
+        const matchesName = matchesValueHelpFilter(documentNameFilter, document.name);
         const matchesPlant = !documentPlantFilter || document.plantId === documentPlantFilter;
         const matchesProject = !documentProjectFilter || document.projectId === documentProjectFilter;
-        return matchesPlant && matchesProject;
+        const matchesUploader = !documentUploaderFilter || document.uploadedBy === documentUploaderFilter;
+        const matchesCategory = matchesValueHelpFilter(documentCategoryFilter, document.category);
+        const matchesStatus = matchesValueHelpFilter(documentStatusFilter, document.status);
+        return matchesName && matchesPlant && matchesProject && matchesUploader && matchesCategory && matchesStatus;
       }),
-    [documentPlantFilter, documentProjectFilter, documents],
+    [documentCategoryFilter, documentNameFilter, documentPlantFilter, documentProjectFilter, documentStatusFilter, documentUploaderFilter, documents],
   );
+  const userOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.name), "User"), [users]);
+  const userEmailOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.email), "Email"), [users]);
+  const userRoleOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.role), "Role"), [users]);
+  const userStatusOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.status), "Status"), [users]);
+  const userScopeOptions = useMemo(
+    () => [
+      { value: "enterprise", label: "Enterprise access", meta: "Scope" },
+      { value: "single", label: "Single plant", meta: "Scope" },
+      { value: "multi", label: "Multi plant", meta: "Scope" },
+    ],
+    [],
+  );
+  const userSortOptions = useMemo(
+    () => [
+      { value: "name-asc", label: "User A-Z", meta: "Sort" },
+      { value: "role-asc", label: "Role A-Z", meta: "Sort" },
+      { value: "status-asc", label: "Status A-Z", meta: "Sort" },
+      { value: "created-desc", label: "Newest created first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredUsers = useMemo(() => users.filter((candidate) => {
+    const scopeCount = candidate.assignedPlantIds?.length || (candidate.plantId ? 1 : 0);
+    const scope = scopeCount > 1 ? "multi" : scopeCount === 1 ? "single" : "enterprise";
+    return matchesValueHelpFilter(userFilter, candidate.name)
+      && matchesValueHelpFilter(userEmailFilter, candidate.email)
+      && matchesValueHelpFilter(userRoleFilter, candidate.role)
+      && matchesValueHelpFilter(userStatusFilter, candidate.status)
+      && matchesValueHelpFilter(userScopeFilter, scope);
+  }), [userEmailFilter, userFilter, userRoleFilter, userScopeFilter, userStatusFilter, users]);
+  const sortedUsers = useMemo(() => {
+    const next = [...filteredUsers];
+    next.sort((left, right) => {
+      switch (userSort) {
+        case "role-asc":
+          return compareText(left.role, right.role) || compareText(left.name, right.name);
+        case "status-asc":
+          return compareText(left.status, right.status) || compareText(left.name, right.name);
+        case "created-desc":
+          return compareDateValue(right.createdAt, left.createdAt) || compareText(left.name, right.name);
+        case "name-asc":
+        default:
+          return compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filteredUsers, userSort]);
+  const plantOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.name), "Plant"), [plants]);
+  const plantCompanyOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.company), "Company"), [plants]);
+  const plantManagerOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.manager), "Manager"), [plants]);
+  const plantStatusOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.status), "Status"), [plants]);
+  const plantAddressOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.address || plant.location || ""), "Address"), [plants]);
+  const plantSortOptions = useMemo(
+    () => [
+      { value: "name-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "company-asc", label: "Company A-Z", meta: "Sort" },
+      { value: "manager-asc", label: "Manager A-Z", meta: "Sort" },
+      { value: "documents-desc", label: "Most documents first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredPlants = useMemo(() => plants.filter((plant) =>
+    matchesValueHelpFilter(plantFilter, plant.name)
+    && matchesValueHelpFilter(plantCompanyFilter, plant.company)
+    && matchesValueHelpFilter(plantManagerFilter, plant.manager || undefined)
+    && matchesValueHelpFilter(plantStatusFilter, plant.status)
+    && matchesValueHelpFilter(plantAddressFilter, plant.address || plant.location || undefined)
+  ), [plantAddressFilter, plantCompanyFilter, plantFilter, plantManagerFilter, plantStatusFilter, plants]);
+  const sortedPlants = useMemo(() => {
+    const next = [...filteredPlants];
+    next.sort((left, right) => {
+      switch (plantSort) {
+        case "company-asc":
+          return compareText(left.company, right.company) || compareText(left.name, right.name);
+        case "manager-asc":
+          return compareText(left.manager, right.manager) || compareText(left.name, right.name);
+        case "documents-desc":
+          return compareNumber(right.documents, left.documents) || compareText(left.name, right.name);
+        case "name-asc":
+        default:
+          return compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filteredPlants, plantSort]);
   const documentPlantOptions = useMemo(
     () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
     [plants],
@@ -3376,6 +3490,74 @@ function AdminMasterDataPage() {
     () => projects.map((project) => ({ value: project.id, label: project.name, meta: project.code || project.plantName })),
     [projects],
   );
+  const documentUploaderOptions = useMemo(() => buildValueHelpOptions(documents.map((document) => document.uploadedBy), "Uploader"), [documents]);
+  const documentNameOptions = useMemo(() => buildValueHelpOptions(documents.map((document) => document.name), "Document"), [documents]);
+  const documentCategoryOptions = useMemo(() => buildValueHelpOptions(documents.map((document) => document.category), "Category"), [documents]);
+  const documentStatusOptions = useMemo(() => buildValueHelpOptions(documents.map((document) => document.status), "Status"), [documents]);
+  const documentSortOptions = useMemo(
+    () => [
+      { value: "uploaded-desc", label: "Latest uploaded first", meta: "Sort" },
+      { value: "name-asc", label: "Document A-Z", meta: "Sort" },
+      { value: "plant-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "uploader-asc", label: "Uploader A-Z", meta: "Sort" },
+    ],
+    [],
+  );
+  const sortedDocuments = useMemo(() => {
+    const next = [...filteredDocuments];
+    next.sort((left, right) => {
+      switch (documentSort) {
+        case "name-asc":
+          return compareText(left.name, right.name);
+        case "plant-asc":
+          return compareText(left.plant, right.plant) || compareText(left.name, right.name);
+        case "uploader-asc":
+          return compareText(left.uploadedBy, right.uploadedBy) || compareText(left.name, right.name);
+        case "uploaded-desc":
+        default:
+          return compareDateValue(right.date, left.date) || compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [documentSort, filteredDocuments]);
+  const projectNameOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.name), "Project"), [projects]);
+  const projectPlantOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.plantName), "Plant"), [projects]);
+  const projectOwnerOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.owner), "Owner"), [projects]);
+  const projectStatusOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.status), "Status"), [projects]);
+  const projectCodeOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.code), "Code"), [projects]);
+  const projectSortOptions = useMemo(
+    () => [
+      { value: "created-desc", label: "Newest created first", meta: "Sort" },
+      { value: "name-asc", label: "Project A-Z", meta: "Sort" },
+      { value: "plant-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "documents-desc", label: "Most documents first", meta: "Sort" },
+    ],
+    [],
+  );
+  const filteredProjects = useMemo(() => projects.filter((project) =>
+    matchesValueHelpFilter(projectFilter, project.name)
+    && matchesValueHelpFilter(projectPlantFilter, project.plantName)
+    && matchesValueHelpFilter(projectOwnerFilter, project.owner)
+    && matchesValueHelpFilter(projectStatusFilter, project.status)
+    && matchesValueHelpFilter(projectCodeFilter, project.code)
+  ), [projectCodeFilter, projectFilter, projectOwnerFilter, projectPlantFilter, projectStatusFilter, projects]);
+  const sortedProjects = useMemo(() => {
+    const next = [...filteredProjects];
+    next.sort((left, right) => {
+      switch (projectSort) {
+        case "name-asc":
+          return compareText(left.name, right.name);
+        case "plant-asc":
+          return compareText(left.plantName, right.plantName) || compareText(left.name, right.name);
+        case "documents-desc":
+          return compareNumber(right.documentIds.length, left.documentIds.length) || compareText(left.name, right.name);
+        case "created-desc":
+        default:
+          return compareDateValue(right.createdAt, left.createdAt) || compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filteredProjects, projectSort]);
 
   function resetMessages() {
     setNotice("");
@@ -3587,7 +3769,7 @@ function AdminMasterDataPage() {
 
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Master Data" }]} />
+      <Breadcrumbs items={user.role === "Admin" ? [{ label: "Admin", to: "/admin" }, { label: "Master Data" }] : [{ label: "Master Data" }]} />
 
       <section className="rounded-[32px] bg-[linear-gradient(135deg,_#0f172a,_#164e63)] px-6 py-8 text-white shadow-[0_28px_70px_rgba(15,23,42,0.22)]">
         <div className="max-w-4xl">
@@ -3612,260 +3794,381 @@ function AdminMasterDataPage() {
         <MetricCard label="Documents" value={documents.length} hint="Documents available for plant-wise admin control." icon={FileText} tone="teal" />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-3">
-        <SectionCard title="Create user" subtitle="Provision Admin, CEO, or Mining Manager accounts">
-          <div className="grid gap-3">
-            <input value={userDraft.name} onChange={(event) => setUserDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Full name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={userDraft.email} onChange={(event) => setUserDraft((current) => ({ ...current, email: event.target.value }))} placeholder="Email address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <select value={userDraft.role} onChange={(event) => setUserDraft((current) => ({ ...current, role: event.target.value as UserRole, assignedPlantIds: event.target.value === "Mining Manager" ? current.assignedPlantIds : [] }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="Admin">Admin</option>
-              <option value="CEO">CEO</option>
-              <option value="Mining Manager">Mining Manager</option>
-            </select>
-            <div className="relative">
-              <input
-                type={showUserPassword ? "text" : "password"}
-                value={userDraft.password}
-                onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))}
-                placeholder="Temporary password"
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-12 outline-none transition focus:border-teal-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowUserPassword((current) => !current)}
-                className="absolute inset-y-0 right-2 my-auto inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                aria-label={showUserPassword ? "Hide password" : "Show password"}
-              >
-                {showUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Assigned plants</div>
-              <div className="mt-1 text-xs text-slate-500">Optional for Admin and CEO. Use this to scope Mining Managers.</div>
-              <div className="mt-3 grid max-h-44 gap-2 overflow-auto">
-                {plants.map((plant) => (
-                  <label key={`master-user-${plant.id}`} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 text-sm text-slate-700">
-                    <span>{plant.name}</span>
+      <SectionCard title="Master data creation table" subtitle="Create and govern users, plants, projects, and policy controls from one detailed table">
+        <div className="overflow-x-auto rounded-[24px] border border-slate-200">
+          <table className="min-w-[1220px] divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-sm text-slate-500">
+                <th className="px-4 py-3 font-medium">Create</th>
+                <th className="px-4 py-3 font-medium">Column 1</th>
+                <th className="px-4 py-3 font-medium">Column 2</th>
+                <th className="px-4 py-3 font-medium">Column 3</th>
+                <th className="px-4 py-3 font-medium">Column 4</th>
+                <th className="px-4 py-3 font-medium">Column 5</th>
+                <th className="px-4 py-3 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 bg-white text-sm">
+              <tr className="align-top bg-sky-50/60">
+                <td className="px-4 py-4">
+                  <div className="inline-flex rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-700">User</div>
+                  <div className="mt-3 font-semibold text-slate-900">Account creation</div>
+                  <div className="mt-1 text-xs text-slate-500">Provision Admin, CEO, or Mining Manager access.</div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Full name</div>
+                  <input value={userDraft.name} onChange={(event) => setUserDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Full name" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Email</div>
+                  <input value={userDraft.email} onChange={(event) => setUserDraft((current) => ({ ...current, email: event.target.value }))} placeholder="Email address" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Role</div>
+                  <select value={userDraft.role} onChange={(event) => setUserDraft((current) => ({ ...current, role: event.target.value as UserRole, assignedPlantIds: event.target.value === "Mining Manager" ? current.assignedPlantIds : [] }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                    <option value="Admin">Admin</option>
+                    <option value="CEO">CEO</option>
+                    <option value="Mining Manager">Mining Manager</option>
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Temporary password</div>
+                  <div className="relative">
                     <input
-                      type="checkbox"
-                      checked={userDraft.assignedPlantIds.includes(plant.id)}
-                      disabled={userDraft.role !== "Mining Manager"}
-                      onChange={(event) => setUserDraft((current) => ({
-                        ...current,
-                        assignedPlantIds: event.target.checked
-                          ? [...current.assignedPlantIds, plant.id]
-                          : current.assignedPlantIds.filter((id) => id !== plant.id),
-                      }))}
+                      type={showUserPassword ? "text" : "password"}
+                      value={userDraft.password}
+                      onChange={(event) => setUserDraft((current) => ({ ...current, password: event.target.value }))}
+                      placeholder="Temporary password"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-12 outline-none transition focus:border-teal-500"
                     />
-                  </label>
-                ))}
-              </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowUserPassword((current) => !current)}
+                      className="absolute inset-y-0 right-2 my-auto inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={showUserPassword ? "Hide password" : "Show password"}
+                    >
+                      {showUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Assigned plants</div>
+                  <div className="mb-2 text-xs text-slate-500">Optional for Admin and CEO. Active for Mining Managers.</div>
+                  <div className="grid max-h-44 gap-2 overflow-auto rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    {plants.map((plant) => (
+                      <label key={`master-user-${plant.id}`} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 text-sm text-slate-700">
+                        <span>{plant.name}</span>
+                        <input
+                          type="checkbox"
+                          checked={userDraft.assignedPlantIds.includes(plant.id)}
+                          disabled={userDraft.role !== "Mining Manager"}
+                          onChange={(event) => setUserDraft((current) => ({
+                            ...current,
+                            assignedPlantIds: event.target.checked
+                              ? [...current.assignedPlantIds, plant.id]
+                              : current.assignedPlantIds.filter((id) => id !== plant.id),
+                          }))}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="flex flex-col gap-3">
+                    <button onClick={() => void createUserRecord()} disabled={userSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                      Create user
+                    </button>
+                    <button onClick={() => navigate("/admin/users")} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                      Open users
+                    </button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr className="align-top bg-emerald-50/50">
+                <td className="px-4 py-4">
+                  <div className="inline-flex rounded-full border border-emerald-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">Plant</div>
+                  <div className="mt-3 font-semibold text-slate-900">Plant creation</div>
+                  <div className="mt-1 text-xs text-slate-500">Add a new operational plant record.</div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Plant code</div>
+                  <input value={plantDraft.plant} onChange={(event) => setPlantDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Plant name</div>
+                  <input value={plantDraft.plantName} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Plant name 2</div>
+                  <input value={plantDraft.plantName2} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4" colSpan={2}>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Address</div>
+                  <input value={plantDraft.address} onChange={(event) => setPlantDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <button onClick={() => void createPlantRecord()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                    Create plant
+                  </button>
+                </td>
+              </tr>
+
+              <tr className="align-top bg-amber-50/55">
+                <td className="px-4 py-4">
+                  <div className="inline-flex rounded-full border border-amber-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Project</div>
+                  <div className="mt-3 font-semibold text-slate-900">Project creation</div>
+                  <div className="mt-1 text-xs text-slate-500">Register a new project under a selected plant.</div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Plant</div>
+                  <select value={projectDraft.plantId} onChange={(event) => setProjectDraft((current) => ({ ...current, plantId: event.target.value }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
+                    <option value="">Select plant</option>
+                    {plants.map((plant) => (
+                      <option key={`project-${plant.id}`} value={plant.id}>{plant.name}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Project name</div>
+                  <input value={projectDraft.name} onChange={(event) => setProjectDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Project code</div>
+                  <input value={projectDraft.code} onChange={(event) => setProjectDraft((current) => ({ ...current, code: event.target.value }))} placeholder="Project code" className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Due date</div>
+                  <input type="date" value={projectDraft.dueDate} onChange={(event) => setProjectDraft((current) => ({ ...current, dueDate: event.target.value }))} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Description</div>
+                  <textarea value={projectDraft.description} onChange={(event) => setProjectDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Project description" rows={4} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-teal-500" />
+                </td>
+                <td className="px-4 py-4">
+                  <button onClick={() => void createProjectEntry()} disabled={projectSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                    Create project
+                  </button>
+                </td>
+              </tr>
+
+              <tr className="align-top bg-violet-50/45">
+                <td className="px-4 py-4">
+                  <div className="inline-flex rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-violet-700">Policy</div>
+                  <div className="mt-3 font-semibold text-slate-900">Document upload formats</div>
+                  <div className="mt-1 text-xs text-slate-500">Control which file types mining managers are allowed to upload.</div>
+                </td>
+                <td className="px-4 py-4" colSpan={5}>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    {["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"].map((extension) => (
+                      <label key={`format-${extension}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+                        <span>.{extension.toUpperCase()}</span>
+                        <input
+                          type="checkbox"
+                          checked={governancePolicy.allowedUploadFormats.includes(extension)}
+                          onChange={(event) => setGovernancePolicy((current) => ({
+                            ...current,
+                            allowedUploadFormats: event.target.checked
+                              ? [...current.allowedUploadFormats, extension]
+                              : current.allowedUploadFormats.filter((value) => value !== extension),
+                          }))}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 rounded-2xl border border-violet-100 bg-white px-4 py-3 text-xs text-slate-600">
+                    Allowed now: {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "None"}
+                  </div>
+                </td>
+                <td className="px-4 py-4">
+                  <button onClick={() => void saveGovernancePolicy()} disabled={policySubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                    Save policy
+                  </button>
+                </td>
+              </tr>
+
+              <tr className="align-top bg-rose-50/45">
+                <td className="px-4 py-4">
+                  <div className="inline-flex rounded-full border border-rose-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-700">Policy</div>
+                  <div className="mt-3 font-semibold text-slate-900">Mining manager business hours</div>
+                  <div className="mt-1 text-xs text-slate-500">Set the permitted sign-in window and working days for mining managers.</div>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Timezone</div>
+                  <select
+                    value={governancePolicy.businessHours.timezone}
+                    onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, timezone: event.target.value } }))}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                  >
+                    {GOVERNANCE_TIMEZONES.map((timeZone) => (
+                      <option key={timeZone} value={timeZone}>{timeZone}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Start time</div>
+                  <select
+                    value={governancePolicy.businessHours.startHour}
+                    onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, startHour: Number(event.target.value) } }))}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                  >
+                    {GOVERNANCE_TIME_OPTIONS.map((option) => (
+                      <option key={`start-${option.value}`} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">End time</div>
+                  <select
+                    value={governancePolicy.businessHours.endHour}
+                    onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, endHour: Number(event.target.value) } }))}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                  >
+                    {GOVERNANCE_TIME_OPTIONS.map((option) => (
+                      <option key={`end-${option.value}`} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-4 py-4" colSpan={2}>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Working days</div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {BUSINESS_DAY_OPTIONS.map((day) => (
+                      <label key={`day-${day.value}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                        <span>{day.label}</span>
+                        <input
+                          type="checkbox"
+                          checked={governancePolicy.businessHours.allowedDays.includes(day.value)}
+                          onChange={(event) => setGovernancePolicy((current) => ({
+                            ...current,
+                            businessHours: {
+                              ...current.businessHours,
+                              allowedDays: event.target.checked
+                                ? [...current.businessHours.allowedDays, day.value].sort((a, b) => a - b)
+                                : current.businessHours.allowedDays.filter((value) => value !== day.value),
+                            },
+                          }))}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-xs text-slate-600">
+                    Active window: {describeBusinessHours(governancePolicy)}
+                  </div>
+                </td>
+                <td className="px-4 py-4">
+                  <button onClick={() => void saveGovernancePolicy()} disabled={policySubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
+                    Save hours
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      <div className="grid gap-6">
+        <SectionCard title="User registry" subtitle="SAP-style account master data with role, scope, status, and lifecycle visibility">
+          <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+            <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={userOptions} value={userFilter} onChange={setUserFilter} containerClassName="w-full" />
+            <ValueHelp label="Email" placeholder="All emails" emptyLabel="No matching emails." options={userEmailOptions} value={userEmailFilter} onChange={setUserEmailFilter} containerClassName="w-full" />
+            <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={userRoleOptions} value={userRoleFilter} onChange={setUserRoleFilter} containerClassName="w-full" />
+            <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={userStatusOptions} value={userStatusFilter} onChange={setUserStatusFilter} containerClassName="w-full" />
+            <ValueHelp label="Scope" placeholder="All scopes" emptyLabel="No matching scopes." options={userScopeOptions} value={userScopeFilter} onChange={setUserScopeFilter} containerClassName="w-full" />
+            <div className="flex items-end gap-3">
+              <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={userSortOptions} value={userSort} onChange={setUserSort} containerClassName="w-full" clearLabel="User A-Z" clearDescription="Reset to the default sort order" />
+              <button type="button" onClick={() => { setUserFilter(""); setUserEmailFilter(""); setUserRoleFilter(""); setUserStatusFilter(""); setUserScopeFilter(""); setUserSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
             </div>
-            <div className="flex flex-wrap gap-3">
-              <button onClick={() => void createUserRecord()} disabled={userSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-                Create user
-              </button>
-              <button onClick={() => navigate("/admin/users")} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                Open full user manager
-              </button>
-            </div>
           </div>
-        </SectionCard>
-
-        <SectionCard title="Create plant" subtitle="Add new operational plants to the platform">
-          <div className="grid gap-3">
-            <input value={plantDraft.plant} onChange={(event) => setPlantDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.plantName} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.plantName2} onChange={(event) => setPlantDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={plantDraft.address} onChange={(event) => setPlantDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <button onClick={() => void createPlantRecord()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-              Create plant
-            </button>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Create project" subtitle="Register a new project under a selected plant">
-          <div className="grid gap-3">
-            <select value={projectDraft.plantId} onChange={(event) => setProjectDraft((current) => ({ ...current, plantId: event.target.value }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500">
-              <option value="">Select plant</option>
-              {plants.map((plant) => (
-                <option key={`project-${plant.id}`} value={plant.id}>{plant.name}</option>
-              ))}
-            </select>
-            <input value={projectDraft.name} onChange={(event) => setProjectDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <input value={projectDraft.code} onChange={(event) => setProjectDraft((current) => ({ ...current, code: event.target.value }))} placeholder="Project code" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <textarea value={projectDraft.description} onChange={(event) => setProjectDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Project description" rows={4} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-teal-500" />
-            <input type="date" value={projectDraft.dueDate} onChange={(event) => setProjectDraft((current) => ({ ...current, dueDate: event.target.value }))} className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-            <button onClick={() => void createProjectEntry()} disabled={projectSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-              Create project
-            </button>
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <SectionCard title="Document upload formats" subtitle="Only these file types will be accepted in the manager upload workspace">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"].map((extension) => (
-              <label key={`format-${extension}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                <span>.{extension.toUpperCase()}</span>
-                <input
-                  type="checkbox"
-                  checked={governancePolicy.allowedUploadFormats.includes(extension)}
-                  onChange={(event) => setGovernancePolicy((current) => ({
-                    ...current,
-                    allowedUploadFormats: event.target.checked
-                      ? [...current.allowedUploadFormats, extension]
-                      : current.allowedUploadFormats.filter((value) => value !== extension),
-                  }))}
-                />
-              </label>
-            ))}
-          </div>
-          <div className="mt-3 text-xs text-slate-500">
-            Managers will only be able to upload files matching the allowed formats selected here. Current set: {governancePolicy.allowedUploadFormats.map((value) => value.toUpperCase()).join(", ") || "None"}.
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Mining manager business hours" subtitle="Define the permitted working window for all mining-manager sign-ins">
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">Timezone</span>
-              <select
-                value={governancePolicy.businessHours.timezone}
-                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, timezone: event.target.value } }))}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-              >
-                {GOVERNANCE_TIMEZONES.map((timeZone) => (
-                  <option key={timeZone} value={timeZone}>{timeZone}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">Start time</span>
-              <select
-                value={governancePolicy.businessHours.startHour}
-                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, startHour: Number(event.target.value) } }))}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-              >
-                {GOVERNANCE_TIME_OPTIONS.map((option) => (
-                  <option key={`start-${option.value}`} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="font-medium text-slate-700">End time</span>
-              <select
-                value={governancePolicy.businessHours.endHour}
-                onChange={(event) => setGovernancePolicy((current) => ({ ...current, businessHours: { ...current.businessHours, endHour: Number(event.target.value) } }))}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
-              >
-                {GOVERNANCE_TIME_OPTIONS.map((option) => (
-                  <option key={`end-${option.value}`} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Active window: {describeBusinessHours(governancePolicy)}
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {BUSINESS_DAY_OPTIONS.map((day) => (
-              <label key={`day-${day.value}`} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                <span>{day.label}</span>
-                <input
-                  type="checkbox"
-                  checked={governancePolicy.businessHours.allowedDays.includes(day.value)}
-                  onChange={(event) => setGovernancePolicy((current) => ({
-                    ...current,
-                    businessHours: {
-                      ...current.businessHours,
-                      allowedDays: event.target.checked
-                        ? [...current.businessHours.allowedDays, day.value].sort((a, b) => a - b)
-                        : current.businessHours.allowedDays.filter((value) => value !== day.value),
-                    },
-                  }))}
-                />
-              </label>
-            ))}
-          </div>
-          <div className="mt-4">
-            <button onClick={() => void saveGovernancePolicy()} disabled={policySubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-              Save policy controls
-            </button>
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <SectionCard title="User registry snapshot" subtitle="Recent accounts and direct access into user governance">
           <div className="overflow-hidden rounded-[24px] border border-slate-200">
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
                 <tr className="text-left text-sm text-slate-500">
                   <th className="px-4 py-3 font-medium">Name</th>
+                  <th className="px-4 py-3 font-medium">Email</th>
                   <th className="px-4 py-3 font-medium">Role</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Assigned scope</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white text-sm">
-                {users.slice(0, 8).map((candidate) => (
+                {sortedUsers.map((candidate) => (
                   <tr key={candidate.id}>
-                    <td className="px-4 py-4">
-                      <div className="font-medium text-slate-900">{candidate.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{candidate.email}</div>
-                    </td>
+                    <td className="px-4 py-4 font-medium text-slate-900">{candidate.name}</td>
+                    <td className="px-4 py-4 text-slate-600">{candidate.email}</td>
                     <td className="px-4 py-4 text-slate-600">{candidate.role}</td>
+                    <td className="px-4 py-4 text-slate-600">{candidate.status}</td>
                     <td className="px-4 py-4 text-slate-600">{candidate.assignedPlants?.join(", ") || candidate.plant || "Enterprise access"}</td>
+                    <td className="px-4 py-4 text-slate-600">{formatDate(candidate.createdAt || null)}</td>
                   </tr>
                 ))}
+                {!sortedUsers.length ? <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No users matched the current filters.</td></tr> : null}
               </tbody>
             </table>
           </div>
         </SectionCard>
 
-        <SectionCard title="Plant registry" subtitle="Review, edit, or remove plants from master data">
-          <div className="space-y-4">
-            {plants.map((plant) => (
-              <div key={plant.id} className="rounded-[24px] border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold text-slate-900">{plant.plantName || plant.name}</div>
-                    <div className="mt-1 text-sm text-slate-500">{[plant.plant, plant.plantName2, plant.address].filter(Boolean).join(" • ")}</div>
-                    <div className="mt-1 text-xs text-slate-400">{plant.documents} document{plant.documents === 1 ? "" : "s"} linked</div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={() => openPlantEditor(plant)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
-                      Edit
-                    </button>
-                    <button onClick={() => void removePlantRecord(plant)} className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {editingPlantId ? (
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
-                <div className="text-base font-semibold text-slate-900">Edit plant</div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <input value={plantEditDraft.plant} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.plantName} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.plantName2} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                  <input value={plantEditDraft.address} onChange={(event) => setPlantEditDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button onClick={() => void savePlantEdit()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">
-                    Save plant
-                  </button>
-                  <button onClick={() => setEditingPlantId(null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
+        <SectionCard title="Plant registry" subtitle="Master-data table for operational plants with edit and delete actions">
+          <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+            <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={plantOptions} value={plantFilter} onChange={setPlantFilter} containerClassName="w-full" />
+            <ValueHelp label="Company" placeholder="All companies" emptyLabel="No matching companies." options={plantCompanyOptions} value={plantCompanyFilter} onChange={setPlantCompanyFilter} containerClassName="w-full" />
+            <ValueHelp label="Manager" placeholder="All managers" emptyLabel="No matching managers." options={plantManagerOptions} value={plantManagerFilter} onChange={setPlantManagerFilter} containerClassName="w-full" />
+            <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={plantStatusOptions} value={plantStatusFilter} onChange={setPlantStatusFilter} containerClassName="w-full" />
+            <ValueHelp label="Address" placeholder="All addresses" emptyLabel="No matching addresses." options={plantAddressOptions} value={plantAddressFilter} onChange={setPlantAddressFilter} containerClassName="w-full" />
+            <div className="flex items-end gap-3">
+              <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={plantSortOptions} value={plantSort} onChange={setPlantSort} containerClassName="w-full" clearLabel="Plant A-Z" clearDescription="Reset to the default sort order" />
+              <button type="button" onClick={() => { setPlantFilter(""); setPlantCompanyFilter(""); setPlantManagerFilter(""); setPlantStatusFilter(""); setPlantAddressFilter(""); setPlantSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+            </div>
           </div>
+          <div className="overflow-hidden rounded-[24px] border border-slate-200">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-sm text-slate-500">
+                  <th className="px-4 py-3 font-medium">Plant</th>
+                  <th className="px-4 py-3 font-medium">Plant code</th>
+                  <th className="px-4 py-3 font-medium">Company</th>
+                  <th className="px-4 py-3 font-medium">Manager</th>
+                  <th className="px-4 py-3 font-medium">Documents</th>
+                  <th className="px-4 py-3 font-medium">Address</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                {sortedPlants.map((plant) => (
+                  <tr key={plant.id}>
+                    <td className="px-4 py-4 font-medium text-slate-900">{plant.plantName || plant.name}</td>
+                    <td className="px-4 py-4 text-slate-600">{plant.plant || "-"}</td>
+                    <td className="px-4 py-4 text-slate-600">{plant.company || "-"}</td>
+                    <td className="px-4 py-4 text-slate-600">{plant.manager || "Unassigned"}</td>
+                    <td className="px-4 py-4 text-slate-600">{plant.documents}</td>
+                    <td className="px-4 py-4 text-slate-600">{plant.address || plant.location || "-"}</td>
+                    <td className="px-4 py-4">
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => openPlantEditor(plant)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50">Edit</button>
+                        <button onClick={() => void removePlantRecord(plant)} className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!sortedPlants.length ? <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500">No plants matched the current filters.</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+          {editingPlantId ? (
+            <div className="mt-5 rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+              <div className="text-base font-semibold text-slate-900">Edit plant</div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <input value={plantEditDraft.plant} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plant: event.target.value }))} placeholder="Plant" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                <input value={plantEditDraft.plantName} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName: event.target.value }))} placeholder="Plant Name" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                <input value={plantEditDraft.plantName2} onChange={(event) => setPlantEditDraft((current) => ({ ...current, plantName2: event.target.value }))} placeholder="Plant Name 2" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+                <input value={plantEditDraft.address} onChange={(event) => setPlantEditDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Address" className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button onClick={() => void savePlantEdit()} disabled={plantSubmitting} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60">Save plant</button>
+                <button onClick={() => setEditingPlantId(null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
+              </div>
+            </div>
+          ) : null}
         </SectionCard>
       </div>
 
@@ -3873,59 +4176,62 @@ function AdminMasterDataPage() {
         {loadingProjects ? <div className="text-sm text-slate-500">Loading project registry...</div> : null}
         {!loadingProjects && projectError ? <div className="text-sm text-amber-700">{projectError}</div> : null}
         {!loadingProjects && !projectError ? (
-          <div className="overflow-hidden rounded-[24px] border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200">
-              <thead className="bg-slate-50">
-                <tr className="text-left text-sm text-slate-500">
-                  <th className="px-4 py-3 font-medium">Project</th>
-                  <th className="px-4 py-3 font-medium">Plant</th>
-                  <th className="px-4 py-3 font-medium">Owner</th>
-                  <th className="px-4 py-3 font-medium">Created</th>
-                  <th className="px-4 py-3 font-medium">Documents</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white text-sm">
-                {projects.map((project) => (
-                  <tr key={project.id}>
-                    <td className="px-4 py-4">
-                      <div className="font-medium text-slate-900">{project.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{project.code || project.id}</div>
-                    </td>
-                    <td className="px-4 py-4 text-slate-600">{project.plantName}</td>
-                    <td className="px-4 py-4 text-slate-600">{project.owner}</td>
-                    <td className="px-4 py-4 text-slate-600">{formatDate(project.createdAt)}</td>
-                    <td className="px-4 py-4 text-slate-600">{project.documentIds.length}</td>
+          <>
+            <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <ValueHelp label="Project" placeholder="All projects" emptyLabel="No matching projects." options={projectNameOptions} value={projectFilter} onChange={setProjectFilter} containerClassName="w-full" />
+              <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={projectPlantOptions} value={projectPlantFilter} onChange={setProjectPlantFilter} containerClassName="w-full" />
+              <ValueHelp label="Owner" placeholder="All owners" emptyLabel="No matching owners." options={projectOwnerOptions} value={projectOwnerFilter} onChange={setProjectOwnerFilter} containerClassName="w-full" />
+              <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={projectStatusOptions} value={projectStatusFilter} onChange={setProjectStatusFilter} containerClassName="w-full" />
+              <ValueHelp label="Code" placeholder="All codes" emptyLabel="No matching codes." options={projectCodeOptions} value={projectCodeFilter} onChange={setProjectCodeFilter} containerClassName="w-full" />
+              <div className="flex items-end gap-3">
+                <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={projectSortOptions} value={projectSort} onChange={setProjectSort} containerClassName="w-full" clearLabel="Newest created first" clearDescription="Reset to the default sort order" />
+                <button type="button" onClick={() => { setProjectFilter(""); setProjectPlantFilter(""); setProjectOwnerFilter(""); setProjectStatusFilter(""); setProjectCodeFilter(""); setProjectSort("created-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+              </div>
+            </div>
+            <div className="overflow-hidden rounded-[24px] border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr className="text-left text-sm text-slate-500">
+                    <th className="px-4 py-3 font-medium">Project</th>
+                    <th className="px-4 py-3 font-medium">Plant</th>
+                    <th className="px-4 py-3 font-medium">Owner</th>
+                    <th className="px-4 py-3 font-medium">Created</th>
+                    <th className="px-4 py-3 font-medium">Documents</th>
                   </tr>
-                ))}
-                {!projects.length ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-slate-500">No projects have been created yet.</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white text-sm">
+                  {sortedProjects.map((project) => (
+                    <tr key={project.id}>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-slate-900">{project.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">{project.code || project.id}</div>
+                      </td>
+                      <td className="px-4 py-4 text-slate-600">{project.plantName}</td>
+                      <td className="px-4 py-4 text-slate-600">{project.owner}</td>
+                      <td className="px-4 py-4 text-slate-600">{formatDate(project.createdAt)}</td>
+                      <td className="px-4 py-4 text-slate-600">{project.documentIds.length}</td>
+                    </tr>
+                  ))}
+                  {!sortedProjects.length ? <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">No projects matched the current filters.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : null}
       </SectionCard>
 
       <SectionCard title="Document registry" subtitle="Plant-wise document visibility with edit and delete controls">
-        <div className="mb-5 flex flex-wrap items-center gap-3">
-          <ValueHelp
-            placeholder="All plants"
-            emptyLabel="No matching plants."
-            options={documentPlantOptions}
-            value={documentPlantFilter}
-            onChange={setDocumentPlantFilter}
-            containerClassName="min-w-[220px]"
-          />
-          <ValueHelp
-            placeholder="All projects"
-            emptyLabel="No matching projects."
-            options={documentProjectOptions}
-            value={documentProjectFilter}
-            onChange={setDocumentProjectFilter}
-            containerClassName="min-w-[220px]"
-          />
+        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <ValueHelp label="Document" placeholder="All documents" emptyLabel="No matching documents." options={documentNameOptions} value={documentNameFilter} onChange={setDocumentNameFilter} containerClassName="w-full" />
+          <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={documentPlantOptions} value={documentPlantFilter} onChange={setDocumentPlantFilter} containerClassName="w-full" />
+          <ValueHelp label="Project" placeholder="All projects" emptyLabel="No matching projects." options={documentProjectOptions} value={documentProjectFilter} onChange={setDocumentProjectFilter} containerClassName="w-full" />
+          <ValueHelp label="Uploader" placeholder="All uploaders" emptyLabel="No matching uploaders." options={documentUploaderOptions} value={documentUploaderFilter} onChange={setDocumentUploaderFilter} containerClassName="w-full" />
+          <ValueHelp label="Category" placeholder="All categories" emptyLabel="No matching categories." options={documentCategoryOptions} value={documentCategoryFilter} onChange={setDocumentCategoryFilter} containerClassName="w-full" />
+          <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={documentStatusOptions} value={documentStatusFilter} onChange={setDocumentStatusFilter} containerClassName="w-full" />
+          <div className="flex items-end gap-3">
+            <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={documentSortOptions} value={documentSort} onChange={setDocumentSort} containerClassName="w-full" clearLabel="Latest uploaded first" clearDescription="Reset to the default sort order" />
+            <button type="button" onClick={() => { setDocumentNameFilter(""); setDocumentPlantFilter(""); setDocumentProjectFilter(""); setDocumentUploaderFilter(""); setDocumentCategoryFilter(""); setDocumentStatusFilter(""); setDocumentSort("uploaded-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+          </div>
         </div>
         <div className="overflow-hidden rounded-[24px] border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200">
@@ -3940,7 +4246,7 @@ function AdminMasterDataPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white text-sm">
-              {filteredDocuments.slice(0, 16).map((document) => (
+              {sortedDocuments.slice(0, 20).map((document) => (
                 <tr key={document.id}>
                   <td className="px-4 py-4">
                     <div className="font-medium text-slate-900">{document.name}</div>
@@ -3962,9 +4268,9 @@ function AdminMasterDataPage() {
                   </td>
                 </tr>
               ))}
-              {!filteredDocuments.length ? (
+              {!sortedDocuments.length ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No documents matched the current plant or project filter.</td>
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">No documents matched the current filters.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -5549,7 +5855,7 @@ function AppContent() {
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
           { path: "admin/users", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "admin/users/:userId", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
-          { path: "admin/master-data", element: <RoleGate allowed={["Admin"]} capability="canManageUsers"><AdminMasterDataPage /></RoleGate> },
+          { path: "admin/master-data", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><AdminMasterDataPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
           { path: "admin/network", element: <RoleGate allowed={["Admin", "CEO"]} capability="canConfigureIp"><AdminNetworkPage /></RoleGate> },
           { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },
