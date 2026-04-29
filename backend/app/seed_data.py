@@ -111,6 +111,9 @@ USERS = [
 IP_RULES = [
     {"id": "IP001", "label": "Localhost", "address": "127.0.0.1", "status": "Allowed"},
     {"id": "IP002", "label": "Private LAN", "address": "::1", "status": "Allowed"},
+    {"id": "IP003", "label": "Private LAN 10/8", "address": "10.0.0.0/8", "status": "Allowed"},
+    {"id": "IP004", "label": "Private LAN 172.16/12", "address": "172.16.0.0/12", "status": "Allowed"},
+    {"id": "IP005", "label": "Private LAN 192.168/16", "address": "192.168.0.0/16", "status": "Allowed"},
 ]
 
 
@@ -308,6 +311,27 @@ def repair_demo_users() -> None:
                     **demo_user,
                     "active_session_id": existing.get("active_session_id") if existing else None,
                     "session_started_at": existing.get("session_started_at") if existing else None,
+                    "created_at": existing.get("created_at", now) if existing else now,
+                }
+            },
+            upsert=True,
+        )
+
+
+def repair_demo_ip_rules() -> None:
+    db = get_db()
+    now = utc_now()
+
+    for rule in IP_RULES:
+        existing = db.ip_rules.find_one({"id": rule["id"]}, {"_id": 0, "created_at": 1})
+        db.ip_rules.update_one(
+            {"id": rule["id"]},
+            {
+                "$set": {
+                    "label": rule["label"],
+                    "address": rule["address"],
+                    "status": rule["status"],
+                    "last_updated_at": now,
                     "created_at": existing.get("created_at", now) if existing else now,
                 }
             },

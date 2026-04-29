@@ -5,6 +5,7 @@ import {
   Lock, Globe, SlidersHorizontal, X, RefreshCw, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
+import { exportRowsToCsv, exportRowsToExcel } from "../lib/export";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 import { ValueHelp } from "./ui/value-help";
@@ -36,6 +37,8 @@ export function CeoDocuments() {
   const [search, setSearch] = useState("");
   const [filterPlant, setFilterPlant] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [sortBy, setSortBy] = useState<"date" | "name" | "plant">("date");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -54,6 +57,8 @@ export function CeoDocuments() {
         q: search || undefined,
         plant_id: filterPlant || undefined,
         category: filterCategory || undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
         sort_by: sortBy,
       });
       setDocuments(result.items);
@@ -80,7 +85,7 @@ export function CeoDocuments() {
       .then(([, plantsResult]) => setPlants(plantsResult.items))
       .catch((err) => setError(err instanceof Error ? err.message : "Unable to load documents."))
       .finally(() => setLoading(false));
-  }, [filterCategory, filterPlant, search, sortBy]);
+  }, [dateFrom, dateTo, filterCategory, filterPlant, search, sortBy]);
 
   useEffect(() => {
     if (!liveViewEnabled) return;
@@ -92,7 +97,7 @@ export function CeoDocuments() {
     }, LIVE_SYNC_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [liveViewEnabled, filterCategory, filterPlant, search, sortBy, selectedDoc]);
+  }, [dateFrom, dateTo, liveViewEnabled, filterCategory, filterPlant, search, sortBy, selectedDoc]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -130,23 +135,7 @@ export function CeoDocuments() {
     await loadDocuments({ silent: true, keepCurrentSelection: true });
   }
 
-  async function exportDocuments() {
-    try {
-      const { blob, fileName } = await documentsApi.exportCsv();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName || "documents.csv";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to export documents.");
-    }
-  }
-
-  const hasFilter = search || filterPlant || filterCategory;
+  const hasFilter = search || filterPlant || filterCategory || dateFrom || dateTo;
   const searchOptions = useMemo(
     () =>
       Array.from(
@@ -159,7 +148,24 @@ export function CeoDocuments() {
     [documents],
   );
   const plantValueHelpOptions = useMemo(
-    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    () =>
+      plants.map((plant) => ({
+        value: plant.id,
+        label: plant.name,
+        meta: [plant.plant, plant.company, plant.manager].filter(Boolean).join(" • ") || "Plant",
+        keywords: [
+          plant.id,
+          plant.name,
+          plant.plant,
+          plant.plantName,
+          plant.plantName2,
+          plant.company,
+          plant.manager,
+          plant.address,
+          plant.location,
+          plant.status,
+        ].filter((value): value is string => Boolean(value && value.trim())),
+      })),
     [plants],
   );
   const categoryValueHelpOptions = useMemo(
@@ -176,6 +182,28 @@ export function CeoDocuments() {
   );
 
   const visibleDocuments = useMemo(() => documents, [documents]);
+  const exportAllRows = useMemo(
+    () => documents.map((document) => ({
+      document: document.name,
+      plant: document.plant,
+      category: document.category,
+      uploadedBy: document.uploadedBy,
+      uploadedAt: document.date,
+      status: document.status,
+    })),
+    [documents],
+  );
+  const exportFilteredRows = useMemo(
+    () => visibleDocuments.map((document) => ({
+      document: document.name,
+      plant: document.plant,
+      category: document.category,
+      uploadedBy: document.uploadedBy,
+      uploadedAt: document.date,
+      status: document.status,
+    })),
+    [visibleDocuments],
+  );
   const visibleColumns = useMemo(
     () => DOCUMENT_COLUMNS.filter((column) => !hiddenColumns.includes(column.id)),
     [hiddenColumns],
@@ -219,14 +247,11 @@ export function CeoDocuments() {
               : `Live View is off${lastSyncedAt ? ` • Last synced at ${lastSyncedAt}` : ""}`}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => void exportDocuments()}
-            className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors"
-            style={{ fontSize: 13 }}
-          >
-            <Download size={14} /> Export CSV
-          </button>
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+          <button onClick={() => exportRowsToCsv(exportFilteredRows, `documents-filtered-${new Date().toISOString().slice(0, 10)}.csv`)} className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}><Download size={14} /> Filtered CSV</button>
+          <button onClick={() => exportRowsToExcel(exportFilteredRows, `documents-filtered-${new Date().toISOString().slice(0, 10)}.xls`)} className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>Filtered Excel</button>
+          <button onClick={() => exportRowsToCsv(exportAllRows, `documents-all-${new Date().toISOString().slice(0, 10)}.csv`)} className="h-9 px-4 border border-[#0A6ED1] bg-[#0A6ED1] text-white hover:bg-[#0854A0] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>All CSV</button>
+          <button onClick={() => exportRowsToExcel(exportAllRows, `documents-all-${new Date().toISOString().slice(0, 10)}.xls`)} className="h-9 px-4 border border-[#0A6ED1] bg-[#0A6ED1] text-white hover:bg-[#0854A0] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>All Excel</button>
           <button
             onClick={() => setLiveViewEnabled((prev) => !prev)}
             className={`h-9 px-4 border inline-flex items-center gap-2 cursor-pointer transition-colors ${
@@ -276,6 +301,22 @@ export function CeoDocuments() {
           popoverClassName="border-[#d9d9d9]"
         />
 
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(event) => setDateFrom(event.target.value)}
+          className="h-9 min-w-[170px] rounded-md border border-[#d9d9d9] px-3 text-[#333] focus:border-[#0A6ED1] focus:outline-none"
+          aria-label="Filter from date"
+        />
+
+        <input
+          type="date"
+          value={dateTo}
+          onChange={(event) => setDateTo(event.target.value)}
+          className="h-9 min-w-[170px] rounded-md border border-[#d9d9d9] px-3 text-[#333] focus:border-[#0A6ED1] focus:outline-none"
+          aria-label="Filter to date"
+        />
+
         <ValueHelp
           placeholder="Sort: Latest First"
           emptyLabel="No matching sort modes."
@@ -289,7 +330,7 @@ export function CeoDocuments() {
 
         {hasFilter && (
           <button
-            onClick={() => { setSearch(""); setFilterPlant(""); setFilterCategory(""); }}
+            onClick={() => { setSearch(""); setFilterPlant(""); setFilterCategory(""); setDateFrom(""); setDateTo(""); }}
             className="h-9 px-3 text-[#BB0000] hover:bg-[#fff5f5] border border-[#e8c0c0] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
             style={{ fontSize: 13 }}
           >

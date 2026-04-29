@@ -9,7 +9,7 @@ from .api import register_blueprints
 from .config import Config
 from .db import get_db, init_db
 from .security import evaluate_ip_rules, get_client_ip, ip_policy_message, queue_security_alert, record_audit_event
-from .seed_data import repair_demo_users, seed_demo_data
+from .seed_data import repair_demo_ip_rules, repair_demo_users, seed_demo_data
 from .utils import error_response, success_response, utc_now
 
 
@@ -114,6 +114,7 @@ def create_app() -> Flask:
     elif app.config["ENV"] != "production":
         with app.app_context():
             repair_demo_users()
+            repair_demo_ip_rules()
             app.logger.info("Demo users repaired", extra={"event": "demo_users_repaired"})
 
     with app.app_context():

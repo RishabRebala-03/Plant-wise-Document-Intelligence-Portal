@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, time, timezone
+
 from flask import Blueprint, request
 
 from ..auth import hash_password, require_auth, require_capability
@@ -67,6 +69,15 @@ def _record_user_activity(action: str, actor: dict, target: dict, **metadata):
     )
 
 
+def _parse_date_boundary(value: str, *, end_of_day: bool = False) -> datetime | None:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    clock = time.max if end_of_day else time.min
+    return datetime.combine(parsed.date(), clock, tzinfo=timezone.utc)
+
+
 @users_bp.get("/users")
 @require_auth(["Admin", "CEO"])
 @require_capability("canManageUsers")
@@ -78,6 +89,9 @@ def list_users():
     status = request.args.get("status", "").strip()
     plant_id = request.args.get("plantId", "").strip()
     q = request.args.get("q", "").strip()
+    date_field = request.args.get("dateField", "created").strip().lower()
+    date_from = request.args.get("dateFrom", "").strip()
+    date_to = request.args.get("dateTo", "").strip()
     if role:
         query["role"] = role
     if status:
@@ -86,6 +100,22 @@ def list_users():
         query["assigned_plant_ids"] = plant_id
     if q:
         query["$or"] = [{"name": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
+    if date_from or date_to:
+        date_key = "updated_at" if date_field == "updated" else "created_at"
+        date_query = {}
+        if date_from:
+            parsed_from = _parse_date_boundary(date_from)
+            if parsed_from is None:
+                return error_response("Invalid dateFrom value. Use YYYY-MM-DD.", 400)
+            date_query["$gte"] = parsed_from
+        if date_to:
+            parsed_to = _parse_date_boundary(date_to, end_of_day=True)
+            if parsed_to is None:
+                return error_response("Invalid dateTo value. Use YYYY-MM-DD.", 400)
+            date_query["$lte"] = parsed_to
+        if "$gte" in date_query and "$lte" in date_query and date_query["$gte"] > date_query["$lte"]:
+            return error_response("dateFrom cannot be later than dateTo", 400)
+        query[date_key] = date_query
     if actor["role"] == "CEO":
         query["role"] = "Mining Manager"
     users = [serialize_user(user) for user in db.users.find(query).sort("name", 1)]

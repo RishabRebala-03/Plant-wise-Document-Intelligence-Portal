@@ -4,6 +4,7 @@ import {
   Eye, Download, Trash2, X,
 } from "lucide-react";
 import { LIVE_SYNC_INTERVAL_MS, categoryOptions, documentsApi, plantsApi } from "../lib/api";
+import { exportRowsToCsv, exportRowsToExcel } from "../lib/export";
 import type { Comment, DocumentRecord, Plant } from "../lib/types";
 import { DocumentDrawer } from "./document-drawer";
 import { ValueHelp } from "./ui/value-help";
@@ -22,6 +23,8 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [filterPlant, setFilterPlant] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const searchOptions = useMemo(
@@ -36,7 +39,24 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
     [],
   );
   const plantValueHelpOptions = useMemo(
-    () => plants.map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" })),
+    () =>
+      plants.map((plant) => ({
+        value: plant.id,
+        label: plant.name,
+        meta: [plant.plant, plant.company, plant.manager].filter(Boolean).join(" • ") || "Plant",
+        keywords: [
+          plant.id,
+          plant.name,
+          plant.plant,
+          plant.plantName,
+          plant.plantName2,
+          plant.company,
+          plant.manager,
+          plant.address,
+          plant.location,
+          plant.status,
+        ].filter((value): value is string => Boolean(value && value.trim())),
+      })),
     [plants],
   );
 
@@ -47,6 +67,8 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
         q: search || undefined,
         category: filterCategory || undefined,
         plant_id: !mine ? filterPlant || undefined : undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
       }),
       plantsApi.list(),
     ]);
@@ -66,14 +88,14 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
     load()
       .catch((err) => setError(err instanceof Error ? err.message : "Unable to load documents."))
       .finally(() => setLoading(false));
-  }, [filterCategory, filterPlant, mine, search]);
+  }, [dateFrom, dateTo, filterCategory, filterPlant, mine, search]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       void load({ keepCurrentSelection: Boolean(selectedDoc) }).catch(() => undefined);
     }, LIVE_SYNC_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [filterCategory, filterPlant, mine, search, selectedDoc]);
+  }, [dateFrom, dateTo, filterCategory, filterPlant, mine, search, selectedDoc]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -120,25 +142,20 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
     await load();
   }
 
-  async function exportDocuments() {
-    try {
-      const { blob, fileName } = await documentsApi.exportCsv();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName || "documents.csv";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to export documents.");
-    }
-  }
-
   const pageTitle = mine ? "My Documents" : "All Documents";
   const pageDesc = mine ? "Documents uploaded by you" : "All accessible documents";
-  const hasFilter = search || filterCategory || filterPlant;
+  const hasFilter = search || filterCategory || filterPlant || dateFrom || dateTo;
+  const exportAllRows = useMemo(
+    () => documents.map((document) => ({
+      document: document.name,
+      plant: document.plant,
+      category: document.category,
+      uploadedBy: document.uploadedBy,
+      uploadedAt: document.date,
+      status: document.status,
+    })),
+    [documents],
+  );
 
   if (loading) return <div className="p-7 text-[#6a6d70]">Loading {pageTitle.toLowerCase()}...</div>;
   if (error) return <div className="p-7 text-[#BB0000]">{error}</div>;
@@ -150,13 +167,12 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
           <h1 className="text-[#1a1a1a]" style={{ fontSize: 20, fontWeight: 600 }}>{pageTitle}</h1>
           <p className="text-[#6a6d70] mt-1" style={{ fontSize: 14 }}>{pageDesc}</p>
         </div>
-        <button
-          onClick={() => void exportDocuments()}
-          className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0"
-          style={{ fontSize: 13 }}
-        >
-          <Download size={14} /> Export
-        </button>
+        <div className="flex flex-wrap justify-end gap-2 shrink-0">
+          <button onClick={() => exportRowsToCsv(exportAllRows, `manager-documents-filtered-${new Date().toISOString().slice(0, 10)}.csv`)} className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}><Download size={14} /> Filtered CSV</button>
+          <button onClick={() => exportRowsToExcel(exportAllRows, `manager-documents-filtered-${new Date().toISOString().slice(0, 10)}.xls`)} className="h-9 px-4 border border-[#d9d9d9] bg-white text-[#333] hover:bg-[#f5f5f5] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>Filtered Excel</button>
+          <button onClick={() => exportRowsToCsv(exportAllRows, `manager-documents-all-${new Date().toISOString().slice(0, 10)}.csv`)} className="h-9 px-4 border border-[#0A6ED1] bg-[#0A6ED1] text-white hover:bg-[#0854A0] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>All CSV</button>
+          <button onClick={() => exportRowsToExcel(exportAllRows, `manager-documents-all-${new Date().toISOString().slice(0, 10)}.xls`)} className="h-9 px-4 border border-[#0A6ED1] bg-[#0A6ED1] text-white hover:bg-[#0854A0] inline-flex items-center gap-2 cursor-pointer transition-colors" style={{ fontSize: 13 }}>All Excel</button>
+        </div>
       </div>
 
       <div className="bg-white border border-[#e8e8e8] px-5 py-4 mb-5 flex flex-wrap items-center gap-3">
@@ -182,6 +198,22 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
           popoverClassName="border-[#d9d9d9]"
         />
 
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(event) => setDateFrom(event.target.value)}
+          className="h-9 min-w-[170px] rounded-md border border-[#d9d9d9] px-3 text-[#333] focus:border-[#0A6ED1] focus:outline-none"
+          aria-label="Filter from date"
+        />
+
+        <input
+          type="date"
+          value={dateTo}
+          onChange={(event) => setDateTo(event.target.value)}
+          className="h-9 min-w-[170px] rounded-md border border-[#d9d9d9] px-3 text-[#333] focus:border-[#0A6ED1] focus:outline-none"
+          aria-label="Filter to date"
+        />
+
         {!mine && (
           <ValueHelp
             placeholder="All plants"
@@ -197,7 +229,7 @@ export function ManagerDocuments({ mine = true }: ManagerDocumentsProps) {
 
         {hasFilter && (
           <button
-            onClick={() => { setSearch(""); setFilterCategory(""); setFilterPlant(""); }}
+            onClick={() => { setSearch(""); setFilterCategory(""); setFilterPlant(""); setDateFrom(""); setDateTo(""); }}
             className="h-9 px-3 text-[#BB0000] hover:bg-[#fff5f5] border border-[#e8c0c0] inline-flex items-center gap-1.5 cursor-pointer"
             style={{ fontSize: 13 }}
           >

@@ -219,6 +219,8 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
   const [ipFilter, setIpFilter] = useState("");
   const [sessionFilter, setSessionFilter] = useState("");
   const [dateFilter, setDateFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState("time-desc");
 
   const focusOptions = useMemo(() => {
@@ -370,9 +372,11 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
       const matchesIp = !ipFilter || ip === ipFilter;
       const matchesSession = !sessionFilter || sessionId === sessionFilter;
       const matchesDate = !dateFilter || activityDate === dateFilter;
-      return matchesFocus && matchesAction && matchesActor && matchesRole && matchesPlant && matchesRecord && matchesEntity && matchesIp && matchesSession && matchesDate;
+      const matchesFrom = !dateFrom || (activityDate && activityDate >= dateFrom);
+      const matchesTo = !dateTo || (activityDate && activityDate <= dateTo);
+      return matchesFocus && matchesAction && matchesActor && matchesRole && matchesPlant && matchesRecord && matchesEntity && matchesIp && matchesSession && matchesDate && matchesFrom && matchesTo;
     });
-  }, [activities, actionFilter, actorFilter, dateFilter, entityFilter, focusFilter, ipFilter, plantFilter, recordFilter, roleFilter, sessionFilter]);
+  }, [activities, actionFilter, actorFilter, dateFilter, dateFrom, dateTo, entityFilter, focusFilter, ipFilter, plantFilter, recordFilter, roleFilter, sessionFilter]);
 
   const sorted = useMemo(() => {
     const next = [...filtered];
@@ -573,9 +577,17 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
         <ValueHelp label="IP Address" placeholder="All IPs" emptyLabel="No matching IPs." options={ipOptions} value={ipFilter} onChange={setIpFilter} containerClassName="w-full" />
         <ValueHelp label="Session" placeholder="All sessions" emptyLabel="No matching sessions." options={sessionOptions} value={sessionFilter} onChange={setSessionFilter} containerClassName="w-full" />
         <ValueHelp label="Date" placeholder="All dates" emptyLabel="No matching dates." options={dateOptions} value={dateFilter} onChange={setDateFilter} containerClassName="w-full" />
+        <label className="space-y-2 text-sm">
+          <span className="font-medium text-slate-700">From Date</span>
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+        </label>
+        <label className="space-y-2 text-sm">
+          <span className="font-medium text-slate-700">To Date</span>
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+        </label>
         <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={sortOptions} value={sortOrder} onChange={setSortOrder} containerClassName="w-full" clearLabel="Latest event first" clearDescription="Reset to the default sort order" />
 
-        {(focusFilter || actionFilter || actorFilter || roleFilter || plantFilter || recordFilter || entityFilter || ipFilter || sessionFilter || dateFilter) && (
+        {(focusFilter || actionFilter || actorFilter || roleFilter || plantFilter || recordFilter || entityFilter || ipFilter || sessionFilter || dateFilter || dateFrom || dateTo) && (
           <button
             type="button"
             onClick={() => {
@@ -589,6 +601,8 @@ export function DetailedActivityLog({ activities }: DetailedActivityLogProps) {
               setIpFilter("");
               setSessionFilter("");
               setDateFilter("");
+              setDateFrom("");
+              setDateTo("");
               setSortOrder("time-desc");
             }}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50 xl:col-span-2"

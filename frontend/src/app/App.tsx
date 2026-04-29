@@ -74,10 +74,12 @@ import { ManagerUpload } from "./components/manager-upload";
 import { SettingsPage } from "./components/settings-page";
 import { DetailedActivityLog } from "./components/detailed-activity-log";
 import { DocumentDrawer } from "./components/document-drawer";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { ValueHelp, type ValueHelpOption } from "./components/ui/value-help";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ApiError, LIVE_SYNC_INTERVAL_MS, activitiesApi, documentsApi, notificationsApi, plantsApi, projectsApi, settingsApi, usersApi } from "./lib/api";
+import { exportRowsToCsv, exportRowsToExcel, type ExportRow } from "./lib/export";
 import {
   createProject,
   defaultPortalState,
@@ -169,6 +171,12 @@ const BUSINESS_DAY_OPTIONS = [
   { label: "Sat", value: 5 },
   { label: "Sun", value: 6 },
 ];
+const RELATIVE_DATE_PRESET_OPTIONS = [
+  { value: "1m", label: "Last 1 month", meta: "Date range" },
+  { value: "3m", label: "Last 3 months", meta: "Date range" },
+  { value: "6m", label: "Last 6 months", meta: "Date range" },
+  { value: "1y", label: "Last 1 year", meta: "Date range" },
+];
 
 function usePortal() {
   const value = useContext(PortalContext);
@@ -209,6 +217,42 @@ function formatBusinessHour(value: number) {
   return GOVERNANCE_TIME_OPTIONS.find((option) => option.value === value)?.label || `${value}:00`;
 }
 
+function isoDateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function resolveRelativeDateRange(preset: string) {
+  if (!preset) return null;
+  const now = new Date();
+  const end = isoDateOnly(now);
+  const start = new Date(now);
+  switch (preset) {
+    case "1m":
+      start.setMonth(start.getMonth() - 1);
+      break;
+    case "3m":
+      start.setMonth(start.getMonth() - 3);
+      break;
+    case "6m":
+      start.setMonth(start.getMonth() - 6);
+      break;
+    case "1y":
+      start.setFullYear(start.getFullYear() - 1);
+      break;
+    default:
+      return null;
+  }
+  return { from: isoDateOnly(start), to: end };
+}
+
+function matchesRelativeDatePreset(value: string | null | undefined, preset: string) {
+  if (!preset) return true;
+  if (!value) return false;
+  const range = resolveRelativeDateRange(preset);
+  if (!range) return true;
+  return value >= range.from && value <= range.to;
+}
+
 function normalizeSearchValue(value: string | null | undefined) {
   return (value || "").trim().toLowerCase();
 }
@@ -228,6 +272,35 @@ function buildValueHelpOptions(values: Array<string | null | undefined>, meta: s
   return Array.from(new Set(values.map((value) => (value || "").trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b))
     .map((value) => ({ value, label: value, meta }));
+}
+
+function buildPlantValueHelpOptions(
+  plants: Plant[],
+  valueSelector: (plant: Plant) => string = (plant) => plant.id,
+) {
+  return plants
+    .map((plant) => {
+      const value = valueSelector(plant);
+      const metaParts = [plant.plant, plant.company, plant.manager].filter(Boolean);
+      return {
+        value,
+        label: plant.name,
+        meta: metaParts.join(" • ") || "Plant",
+        keywords: [
+          plant.id,
+          plant.name,
+          plant.plant,
+          plant.plantName,
+          plant.plantName2,
+          plant.company,
+          plant.manager,
+          plant.address,
+          plant.location,
+          plant.status,
+        ].filter((item): item is string => Boolean(item && item.trim())),
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function compareText(a?: string | null, b?: string | null) {
@@ -615,6 +688,52 @@ function SectionCard({ title, subtitle, children, action }: { title: string; sub
   );
 }
 
+function ExportActions({
+  fileBaseName,
+  filteredRows,
+  allRows,
+}: {
+  fileBaseName: string;
+  filteredRows: ExportRow[];
+  allRows: ExportRow[];
+}) {
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const hasFilteredDifference = filteredRows.length !== allRows.length;
+
+  return (
+    <div className="mt-2 flex flex-wrap justify-end gap-2">
+      <button
+        type="button"
+        onClick={() => exportRowsToCsv(filteredRows, `${fileBaseName}-filtered-${dateStamp}.csv`)}
+        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+      >
+        Export filtered CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => exportRowsToExcel(filteredRows, `${fileBaseName}-filtered-${dateStamp}.xls`)}
+        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+      >
+        Export filtered Excel
+      </button>
+      <button
+        type="button"
+        onClick={() => exportRowsToCsv(allRows, `${fileBaseName}-all-${dateStamp}.csv`)}
+        className="rounded-2xl border border-slate-200 bg-slate-950 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+      >
+        {hasFilteredDifference ? "Export all CSV" : "Export CSV"}
+      </button>
+      <button
+        type="button"
+        onClick={() => exportRowsToExcel(allRows, `${fileBaseName}-all-${dateStamp}.xls`)}
+        className="rounded-2xl border border-slate-200 bg-slate-950 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+      >
+        {hasFilteredDifference ? "Export all Excel" : "Export Excel"}
+      </button>
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -750,6 +869,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
     return [
       [
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
+        { label: "Documents", path: "/documents", icon: FileText },
         { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
         { label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
@@ -1296,17 +1416,23 @@ function PlantIndexPage() {
     [documents, projects, visiblePlants],
   );
   const plantQueryOptions = useMemo(
-    () => {
-      const registry = new Map<string, ValueHelpOption>();
-      plantRows.forEach(({ plant }) => {
-        [plant.name, plant.plant, plant.plantName, plant.plantName2, plant.company, plant.manager, plant.location, plant.address].forEach((value, index) => {
-          if (!value) return;
-          const meta = ["Plant", "Plant code", "Plant name", "Plant name 2", "Company", "Manager", "Location", "Address"][index];
-          registry.set(`${meta}:${value}`, { value, label: value, meta });
-        });
-      });
-      return Array.from(registry.values()).sort((a, b) => a.label.localeCompare(b.label) || (a.meta || "").localeCompare(b.meta || ""));
-    },
+    () =>
+      plantRows.map(({ plant }) => ({
+        value: plant.name,
+        label: plant.name,
+        meta: [plant.plant, plant.company, plant.manager].filter(Boolean).join(" • ") || "Plant",
+        keywords: [
+          plant.id,
+          plant.plant,
+          plant.plantName,
+          plant.plantName2,
+          plant.company,
+          plant.manager,
+          plant.location,
+          plant.address,
+          plant.status,
+        ].filter((value): value is string => Boolean(value && value.trim())),
+      })),
     [plantRows],
   );
   const companyOptions = useMemo(() => buildValueHelpOptions(plantRows.map((row) => row.plant.company), "Company"), [plantRows]);
@@ -1368,6 +1494,38 @@ function PlantIndexPage() {
     });
     return next;
   }, [filteredPlantRows, plantSort]);
+  const allPlantExportRows = useMemo(
+    () =>
+      plantRows.map(({ plant, docCount, projectCount, activityBand }) => ({
+        plantName: plant.name,
+        plantCode: plant.plant,
+        company: plant.company,
+        manager: plant.manager,
+        status: plant.status,
+        address: plant.address || plant.location,
+        documents: docCount,
+        projects: projectCount,
+        activityBand,
+        lastUpload: plant.lastUpload,
+      })),
+    [plantRows],
+  );
+  const filteredPlantExportRows = useMemo(
+    () =>
+      sortedPlantRows.map(({ plant, docCount, projectCount, activityBand }) => ({
+        plantName: plant.name,
+        plantCode: plant.plant,
+        company: plant.company,
+        manager: plant.manager,
+        status: plant.status,
+        address: plant.address || plant.location,
+        documents: docCount,
+        projects: projectCount,
+        activityBand,
+        lastUpload: plant.lastUpload,
+      })),
+    [sortedPlantRows],
+  );
 
   return (
     <div className="space-y-6">
@@ -1382,15 +1540,33 @@ function PlantIndexPage() {
             {filteredPlantRows.reduce((total, row) => total + row.projectCount, 0)} projects · {filteredPlantRows.reduce((total, row) => total + row.docCount, 0)} documents
           </div>
         </div>
+        <div className="px-4 pb-4">
+          <ExportActions fileBaseName="plants" filteredRows={filteredPlantExportRows} allRows={allPlantExportRows} />
+        </div>
         <div className="grid gap-4 border-b border-slate-200 bg-slate-50/80 px-4 py-4 md:grid-cols-2 xl:grid-cols-6">
+          <div className="w-full">
+            <div className="mb-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              Plant search
+            </div>
+            <div className="relative">
+              <Search size={15} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={plantQuery}
+                onChange={(event) => setPlantQuery(event.target.value)}
+                placeholder="Search by plant, code, manager, company, or address"
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              />
+            </div>
+          </div>
           <ValueHelp
-            label="Search"
-            placeholder="Plant, manager, company..."
-            emptyLabel="No matching plant terms."
+            label="Suggestions"
+            placeholder="Suggested plants"
+            emptyLabel="No matching plant suggestions."
             options={plantQueryOptions}
-            value={plantQuery}
+            value=""
             onChange={setPlantQuery}
             containerClassName="w-full"
+            searchPlaceholder="Search plant suggestions"
           />
           <ValueHelp
             label="Company"
@@ -1714,6 +1890,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
   const [projectId, setProjectId] = useState(scopedProjectId || searchParams.get("projectId") || "");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [datePreset, setDatePreset] = useState("");
   const [documentSort, setDocumentSort] = useState("uploaded-desc");
   const [serverDocuments, setServerDocuments] = useState<EnrichedDocument[]>(documents);
   const [documentsLoading, setDocumentsLoading] = useState(false);
@@ -1770,6 +1947,8 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
         .map((option) => ({ value: option, label: formatDate(option), meta: option })),
     [documents],
   );
+  const effectiveDateFrom = datePreset ? (resolveRelativeDateRange(datePreset)?.from || "") : dateFrom;
+  const effectiveDateTo = datePreset ? (resolveRelativeDateRange(datePreset)?.to || "") : dateTo;
 
   useEffect(() => {
     let active = true;
@@ -1782,8 +1961,8 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
         plantId,
         projectId,
         category,
-        dateFrom,
-        dateTo,
+        dateFrom: effectiveDateFrom,
+        dateTo: effectiveDateTo,
         sort_by: "uploaded_at",
         order: "desc",
       };
@@ -1806,7 +1985,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
       active = false;
       window.clearTimeout(timer);
     };
-  }, [category, dateFrom, dateTo, documents, plantId, projectId, projects, scopedProjectId, plants, query, user]);
+  }, [category, documents, effectiveDateFrom, effectiveDateTo, plantId, projectId, projects, scopedProjectId, plants, query, user]);
 
   const filtered = useMemo(() => serverDocuments.filter((document) => {
     const matchesPlant = !plantId || document.plantId === plantId;
@@ -1815,17 +1994,17 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     const matchesManager = !manager || document.managerName === manager;
     const matchesIdentifier = !identifier || document.identifier === identifier;
     const matchesQuery = !query || [document.name, document.plant, document.projectName, document.category, document.uploadedBy].join(" ").toLowerCase().includes(query.toLowerCase());
-    const matchesFrom = !dateFrom || Boolean(document.date && document.date >= dateFrom);
-    const matchesTo = !dateTo || Boolean(document.date && document.date <= dateTo);
+    const matchesFrom = !effectiveDateFrom || Boolean(document.date && document.date >= effectiveDateFrom);
+    const matchesTo = !effectiveDateTo || Boolean(document.date && document.date <= effectiveDateTo);
     return matchesPlant && matchesProject && matchesCategory && matchesManager && matchesIdentifier && matchesQuery && matchesFrom && matchesTo;
-  }), [category, dateFrom, dateTo, identifier, manager, plantId, projectId, query, serverDocuments]);
+  }), [category, effectiveDateFrom, effectiveDateTo, identifier, manager, plantId, projectId, query, serverDocuments]);
 
   const availableProjects = projects.filter((project) => !plantId || project.plantId === plantId);
   const categories = Array.from(new Set(documents.map((document) => document.category))).sort((a, b) => a.localeCompare(b));
   const categoryOptions = categories.map((item) => ({ value: item, label: item, meta: "Category" }));
-  const plantValueHelpOptions = plants
-    .filter((plant) => user.role !== "Mining Manager" || assignedPlantIds(user).includes(plant.id))
-    .map((plant) => ({ value: plant.id, label: plant.name, meta: "Plant" }));
+  const plantValueHelpOptions = buildPlantValueHelpOptions(
+    plants.filter((plant) => user.role !== "Mining Manager" || assignedPlantIds(user).includes(plant.id)),
+  );
   const projectValueHelpOptions = availableProjects.map((project) => ({ value: project.id, label: project.name, meta: project.code || project.plantName }));
   const documentSortOptions = useMemo(
     () => [
@@ -1862,6 +2041,36 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
     });
     return next;
   }, [documentSort, filtered]);
+  const allDocumentExportRows = useMemo(
+    () =>
+      serverDocuments.map((document) => ({
+        document: document.name,
+        plant: document.plant,
+        project: document.projectName,
+        manager: document.managerName,
+        identifier: document.identifier,
+        category: document.category,
+        status: document.status,
+        uploadedBy: document.uploadedBy,
+        uploadedAt: document.date,
+      })),
+    [serverDocuments],
+  );
+  const filteredDocumentExportRows = useMemo(
+    () =>
+      sortedDocuments.map((document) => ({
+        document: document.name,
+        plant: document.plant,
+        project: document.projectName,
+        manager: document.managerName,
+        identifier: document.identifier,
+        category: document.category,
+        status: document.status,
+        uploadedBy: document.uploadedBy,
+        uploadedAt: document.date,
+      })),
+    [sortedDocuments],
+  );
   const title = scopedProjectId
     ? `${projects.find((project) => project.id === scopedProjectId)?.name || "Project"} documents`
     : "Document listing";
@@ -1874,7 +2083,11 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
         ...(scopedProjectId ? [{ label: title }] : []),
       ]} />
 
-      <SectionCard title={title} subtitle="Separate listing page with advanced search and structured filters">
+      <SectionCard
+        title={title}
+        subtitle="Separate listing page with advanced search and structured filters"
+        action={<ExportActions fileBaseName="documents" filteredRows={filteredDocumentExportRows} allRows={allDocumentExportRows} />}
+      >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <FilterField icon={Search} label="Search">
             <ValueHelp
@@ -1944,8 +2157,12 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
               emptyLabel="No matching dates."
               options={dateOptions}
               value={dateFrom}
-              onChange={setDateFrom}
+              onChange={(value) => {
+                setDatePreset("");
+                setDateFrom(value);
+              }}
               containerClassName="w-full"
+              disabled={Boolean(datePreset)}
             />
           </FilterField>
           <FilterField icon={Clock3} label="To date">
@@ -1954,8 +2171,24 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
               emptyLabel="No matching dates."
               options={dateOptions}
               value={dateTo}
-              onChange={setDateTo}
+              onChange={(value) => {
+                setDatePreset("");
+                setDateTo(value);
+              }}
               containerClassName="w-full"
+              disabled={Boolean(datePreset)}
+            />
+          </FilterField>
+          <FilterField icon={Clock3} label="Date range">
+            <ValueHelp
+              placeholder="Any time"
+              emptyLabel="No matching date ranges."
+              options={RELATIVE_DATE_PRESET_OPTIONS}
+              value={datePreset}
+              onChange={setDatePreset}
+              containerClassName="w-full"
+              clearLabel="Any time"
+              clearDescription="Remove the relative date filter"
             />
           </FilterField>
           <div className="flex items-end">
@@ -1978,6 +2211,7 @@ function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectI
                 setManager("");
                 setIdentifier("");
                 setCategory("");
+                setDatePreset("");
                 setDateFrom("");
                 setDateTo("");
                 setDocumentSort("uploaded-desc");
@@ -3417,24 +3651,32 @@ function AdminMasterDataPage() {
     description: "",
     dueDate: "",
   });
-  const [activeMasterTab, setActiveMasterTab] = useState("records");
+  const [activeMasterTab, setActiveMasterTab] = useState("creation");
   const [userFilter, setUserFilter] = useState("");
   const [userRoleFilter, setUserRoleFilter] = useState("");
   const [userScopeFilter, setUserScopeFilter] = useState("");
   const [userEmailFilter, setUserEmailFilter] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("");
+  const [userDatePreset, setUserDatePreset] = useState("");
+  const [userDateFrom, setUserDateFrom] = useState("");
+  const [userDateTo, setUserDateTo] = useState("");
   const [userSort, setUserSort] = useState("name-asc");
   const [plantFilter, setPlantFilter] = useState("");
   const [plantCompanyFilter, setPlantCompanyFilter] = useState("");
   const [plantManagerFilter, setPlantManagerFilter] = useState("");
   const [plantStatusFilter, setPlantStatusFilter] = useState("");
   const [plantAddressFilter, setPlantAddressFilter] = useState("");
+  const [plantDateFrom, setPlantDateFrom] = useState("");
+  const [plantDateTo, setPlantDateTo] = useState("");
   const [plantSort, setPlantSort] = useState("name-asc");
   const [projectFilter, setProjectFilter] = useState("");
   const [projectPlantFilter, setProjectPlantFilter] = useState("");
   const [projectOwnerFilter, setProjectOwnerFilter] = useState("");
   const [projectStatusFilter, setProjectStatusFilter] = useState("");
   const [projectCodeFilter, setProjectCodeFilter] = useState("");
+  const [projectDatePreset, setProjectDatePreset] = useState("");
+  const [projectDateFrom, setProjectDateFrom] = useState("");
+  const [projectDateTo, setProjectDateTo] = useState("");
   const [projectSort, setProjectSort] = useState("created-desc");
   const [documentNameFilter, setDocumentNameFilter] = useState("");
   const [documentPlantFilter, setDocumentPlantFilter] = useState("");
@@ -3442,6 +3684,9 @@ function AdminMasterDataPage() {
   const [documentUploaderFilter, setDocumentUploaderFilter] = useState("");
   const [documentCategoryFilter, setDocumentCategoryFilter] = useState("");
   const [documentStatusFilter, setDocumentStatusFilter] = useState("");
+  const [documentDatePreset, setDocumentDatePreset] = useState("");
+  const [documentDateFrom, setDocumentDateFrom] = useState("");
+  const [documentDateTo, setDocumentDateTo] = useState("");
   const [documentSort, setDocumentSort] = useState("uploaded-desc");
 
   async function loadProjects() {
@@ -3487,9 +3732,12 @@ function AdminMasterDataPage() {
         const matchesUploader = !documentUploaderFilter || document.uploadedBy === documentUploaderFilter;
         const matchesCategory = matchesValueHelpFilter(documentCategoryFilter, document.category);
         const matchesStatus = matchesValueHelpFilter(documentStatusFilter, document.status);
-        return matchesName && matchesPlant && matchesProject && matchesUploader && matchesCategory && matchesStatus;
+        const matchesDatePreset = matchesRelativeDatePreset(document.date, documentDatePreset);
+        const matchesFrom = !documentDateFrom || Boolean(document.date && document.date >= documentDateFrom);
+        const matchesTo = !documentDateTo || Boolean(document.date && document.date <= documentDateTo);
+        return matchesName && matchesPlant && matchesProject && matchesUploader && matchesCategory && matchesStatus && matchesDatePreset && matchesFrom && matchesTo;
       }),
-    [documentCategoryFilter, documentNameFilter, documentPlantFilter, documentProjectFilter, documentStatusFilter, documentUploaderFilter, documents],
+    [documentCategoryFilter, documentDateFrom, documentDatePreset, documentDateTo, documentNameFilter, documentPlantFilter, documentProjectFilter, documentStatusFilter, documentUploaderFilter, documents],
   );
   const userOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.name), "User"), [users]);
   const userEmailOptions = useMemo(() => buildValueHelpOptions(users.map((candidate) => candidate.email), "Email"), [users]);
@@ -3519,8 +3767,11 @@ function AdminMasterDataPage() {
       && matchesValueHelpFilter(userEmailFilter, candidate.email)
       && matchesValueHelpFilter(userRoleFilter, candidate.role)
       && matchesValueHelpFilter(userStatusFilter, candidate.status)
-      && matchesValueHelpFilter(userScopeFilter, scope);
-  }), [userEmailFilter, userFilter, userRoleFilter, userScopeFilter, userStatusFilter, users]);
+      && matchesValueHelpFilter(userScopeFilter, scope)
+      && matchesRelativeDatePreset(candidate.createdAt, userDatePreset)
+      && (!userDateFrom || Boolean(candidate.createdAt && candidate.createdAt.slice(0, 10) >= userDateFrom))
+      && (!userDateTo || Boolean(candidate.createdAt && candidate.createdAt.slice(0, 10) <= userDateTo));
+  }), [userDateFrom, userDatePreset, userDateTo, userEmailFilter, userFilter, userRoleFilter, userScopeFilter, userStatusFilter, users]);
   const sortedUsers = useMemo(() => {
     const next = [...filteredUsers];
     next.sort((left, right) => {
@@ -3538,7 +3789,7 @@ function AdminMasterDataPage() {
     });
     return next;
   }, [filteredUsers, userSort]);
-  const plantOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.name), "Plant"), [plants]);
+  const plantOptions = useMemo(() => buildPlantValueHelpOptions(plants, (plant) => plant.name), [plants]);
   const plantCompanyOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.company), "Company"), [plants]);
   const plantManagerOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.manager), "Manager"), [plants]);
   const plantStatusOptions = useMemo(() => buildValueHelpOptions(plants.map((plant) => plant.status), "Status"), [plants]);
@@ -3558,7 +3809,9 @@ function AdminMasterDataPage() {
     && matchesValueHelpFilter(plantManagerFilter, plant.manager || undefined)
     && matchesValueHelpFilter(plantStatusFilter, plant.status)
     && matchesValueHelpFilter(plantAddressFilter, plant.address || plant.location || undefined)
-  ), [plantAddressFilter, plantCompanyFilter, plantFilter, plantManagerFilter, plantStatusFilter, plants]);
+    && (!plantDateFrom || Boolean(plant.lastUpload && plant.lastUpload >= plantDateFrom))
+    && (!plantDateTo || Boolean(plant.lastUpload && plant.lastUpload <= plantDateTo))
+  ), [plantAddressFilter, plantCompanyFilter, plantDateFrom, plantDateTo, plantFilter, plantManagerFilter, plantStatusFilter, plants]);
   const sortedPlants = useMemo(() => {
     const next = [...filteredPlants];
     next.sort((left, right) => {
@@ -3634,7 +3887,10 @@ function AdminMasterDataPage() {
     && matchesValueHelpFilter(projectOwnerFilter, project.owner)
     && matchesValueHelpFilter(projectStatusFilter, project.status)
     && matchesValueHelpFilter(projectCodeFilter, project.code)
-  ), [projectCodeFilter, projectFilter, projectOwnerFilter, projectPlantFilter, projectStatusFilter, projects]);
+    && matchesRelativeDatePreset(project.createdAt, projectDatePreset)
+    && (!projectDateFrom || Boolean(project.createdAt && project.createdAt.slice(0, 10) >= projectDateFrom))
+    && (!projectDateTo || Boolean(project.createdAt && project.createdAt.slice(0, 10) <= projectDateTo))
+  ), [projectCodeFilter, projectDateFrom, projectDatePreset, projectDateTo, projectFilter, projectOwnerFilter, projectPlantFilter, projectStatusFilter, projects]);
   const sortedProjects = useMemo(() => {
     const next = [...filteredProjects];
     next.sort((left, right) => {
@@ -3652,6 +3908,114 @@ function AdminMasterDataPage() {
     });
     return next;
   }, [filteredProjects, projectSort]);
+  const allUserExportRows = useMemo(
+    () =>
+      users.map((candidate) => ({
+        name: candidate.name,
+        email: candidate.email,
+        role: candidate.role,
+        status: candidate.status,
+        assignedScope: candidate.assignedPlants?.join(", ") || candidate.plant || "Enterprise access",
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+      })),
+    [users],
+  );
+  const filteredUserExportRows = useMemo(
+    () =>
+      sortedUsers.map((candidate) => ({
+        name: candidate.name,
+        email: candidate.email,
+        role: candidate.role,
+        status: candidate.status,
+        assignedScope: candidate.assignedPlants?.join(", ") || candidate.plant || "Enterprise access",
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+      })),
+    [sortedUsers],
+  );
+  const allPlantRegistryExportRows = useMemo(
+    () =>
+      plants.map((plant) => ({
+        plant: plant.plantName || plant.name,
+        plantCode: plant.plant,
+        company: plant.company,
+        manager: plant.manager,
+        documents: plant.documents,
+        address: plant.address || plant.location,
+        status: plant.status,
+        lastUpload: plant.lastUpload,
+      })),
+    [plants],
+  );
+  const filteredPlantRegistryExportRows = useMemo(
+    () =>
+      sortedPlants.map((plant) => ({
+        plant: plant.plantName || plant.name,
+        plantCode: plant.plant,
+        company: plant.company,
+        manager: plant.manager,
+        documents: plant.documents,
+        address: plant.address || plant.location,
+        status: plant.status,
+        lastUpload: plant.lastUpload,
+      })),
+    [sortedPlants],
+  );
+  const allProjectExportRows = useMemo(
+    () =>
+      projects.map((project) => ({
+        project: project.name,
+        code: project.code,
+        plant: project.plantName,
+        owner: project.owner,
+        status: project.status,
+        createdAt: project.createdAt,
+        dueDate: project.dueDate,
+        documents: project.documentIds.length,
+      })),
+    [projects],
+  );
+  const filteredProjectExportRows = useMemo(
+    () =>
+      sortedProjects.map((project) => ({
+        project: project.name,
+        code: project.code,
+        plant: project.plantName,
+        owner: project.owner,
+        status: project.status,
+        createdAt: project.createdAt,
+        dueDate: project.dueDate,
+        documents: project.documentIds.length,
+      })),
+    [sortedProjects],
+  );
+  const allMasterDocumentExportRows = useMemo(
+    () =>
+      documents.map((document) => ({
+        document: document.name,
+        plant: document.plant,
+        project: document.projectName,
+        uploadedBy: document.uploadedBy,
+        category: document.category,
+        status: document.status,
+        uploadedAt: document.date,
+      })),
+    [documents],
+  );
+  const filteredMasterDocumentExportRows = useMemo(
+    () =>
+      sortedDocuments.map((document) => ({
+        document: document.name,
+        plant: document.plant,
+        project: document.projectName,
+        uploadedBy: document.uploadedBy,
+        category: document.category,
+        status: document.status,
+        uploadedAt: document.date,
+      })),
+    [sortedDocuments],
+  );
 
   function resetMessages() {
     setNotice("");
@@ -3888,6 +4252,31 @@ function AdminMasterDataPage() {
         <MetricCard label="Documents" value={documents.length} hint="Documents available for plant-wise admin control." icon={FileText} tone="teal" />
       </div>
 
+      <SectionCard
+        title="Master data workspace"
+        subtitle="Switch directly to the table you need instead of scanning through every registry"
+        action={(
+          <Tabs value={activeMasterTab} onValueChange={setActiveMasterTab} className="w-full">
+            <TabsList className="grid w-full max-w-[760px] grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1 md:grid-cols-5">
+              <TabsTrigger value="creation" className="rounded-xl text-sm">Creation</TabsTrigger>
+              <TabsTrigger value="users" className="rounded-xl text-sm">Users</TabsTrigger>
+              <TabsTrigger value="plants" className="rounded-xl text-sm">Plants</TabsTrigger>
+              <TabsTrigger value="projects" className="rounded-xl text-sm">Projects</TabsTrigger>
+              <TabsTrigger value="documents" className="rounded-xl text-sm">Documents</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
+      >
+        <div className="text-sm text-slate-500">
+          {activeMasterTab === "creation" ? "Create records and update governance policies from one focused subtab." : null}
+          {activeMasterTab === "users" ? "Review account status, role coverage, and assigned scope without scrolling past other tables." : null}
+          {activeMasterTab === "plants" ? "Work only on plant master records and edit actions in this subtab." : null}
+          {activeMasterTab === "projects" ? "Inspect the full project registry independently from other admin data." : null}
+          {activeMasterTab === "documents" ? "Jump straight to the document registry when that is the only table you need." : null}
+        </div>
+      </SectionCard>
+
+      {activeMasterTab === "creation" ? (
       <SectionCard title="Master data creation table" subtitle="Create and govern users, plants, projects, and policy controls from one detailed table">
         <div className="overflow-x-auto rounded-[24px] border border-slate-200">
           <table className="min-w-[1220px] divide-y divide-slate-200">
@@ -4159,18 +4548,32 @@ function AdminMasterDataPage() {
           </table>
         </div>
       </SectionCard>
+      ) : null}
 
-      <div className="grid gap-6">
-        <SectionCard title="User registry" subtitle="SAP-style account master data with role, scope, status, and lifecycle visibility">
+      {activeMasterTab === "users" ? (
+        <SectionCard
+          title="User registry"
+          subtitle="SAP-style account master data with role, scope, status, and lifecycle visibility"
+          action={<ExportActions fileBaseName="master-data-users" filteredRows={filteredUserExportRows} allRows={allUserExportRows} />}
+        >
           <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={userOptions} value={userFilter} onChange={setUserFilter} containerClassName="w-full" />
             <ValueHelp label="Email" placeholder="All emails" emptyLabel="No matching emails." options={userEmailOptions} value={userEmailFilter} onChange={setUserEmailFilter} containerClassName="w-full" />
             <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={userRoleOptions} value={userRoleFilter} onChange={setUserRoleFilter} containerClassName="w-full" />
             <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={userStatusOptions} value={userStatusFilter} onChange={setUserStatusFilter} containerClassName="w-full" />
             <ValueHelp label="Scope" placeholder="All scopes" emptyLabel="No matching scopes." options={userScopeOptions} value={userScopeFilter} onChange={setUserScopeFilter} containerClassName="w-full" />
+            <ValueHelp label="Created In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={userDatePreset} onChange={setUserDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the created-date filter" />
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">From Date</span>
+              <input type="date" value={userDateFrom} onChange={(event) => setUserDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">To Date</span>
+              <input type="date" value={userDateTo} onChange={(event) => setUserDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
             <div className="flex items-end gap-3">
               <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={userSortOptions} value={userSort} onChange={setUserSort} containerClassName="w-full" clearLabel="User A-Z" clearDescription="Reset to the default sort order" />
-              <button type="button" onClick={() => { setUserFilter(""); setUserEmailFilter(""); setUserRoleFilter(""); setUserStatusFilter(""); setUserScopeFilter(""); setUserSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+              <button type="button" onClick={() => { setUserFilter(""); setUserEmailFilter(""); setUserRoleFilter(""); setUserStatusFilter(""); setUserScopeFilter(""); setUserDatePreset(""); setUserDateFrom(""); setUserDateTo(""); setUserSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
             </div>
           </div>
           <div className="overflow-hidden rounded-[24px] border border-slate-200">
@@ -4201,17 +4604,31 @@ function AdminMasterDataPage() {
             </table>
           </div>
         </SectionCard>
+      ) : null}
 
-        <SectionCard title="Plant registry" subtitle="Master-data table for operational plants with edit and delete actions">
+      {activeMasterTab === "plants" ? (
+        <SectionCard
+          title="Plant registry"
+          subtitle="Master-data table for operational plants with edit and delete actions"
+          action={<ExportActions fileBaseName="master-data-plants" filteredRows={filteredPlantRegistryExportRows} allRows={allPlantRegistryExportRows} />}
+        >
           <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={plantOptions} value={plantFilter} onChange={setPlantFilter} containerClassName="w-full" />
             <ValueHelp label="Company" placeholder="All companies" emptyLabel="No matching companies." options={plantCompanyOptions} value={plantCompanyFilter} onChange={setPlantCompanyFilter} containerClassName="w-full" />
             <ValueHelp label="Manager" placeholder="All managers" emptyLabel="No matching managers." options={plantManagerOptions} value={plantManagerFilter} onChange={setPlantManagerFilter} containerClassName="w-full" />
             <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={plantStatusOptions} value={plantStatusFilter} onChange={setPlantStatusFilter} containerClassName="w-full" />
             <ValueHelp label="Address" placeholder="All addresses" emptyLabel="No matching addresses." options={plantAddressOptions} value={plantAddressFilter} onChange={setPlantAddressFilter} containerClassName="w-full" />
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">From Date</span>
+              <input type="date" value={plantDateFrom} onChange={(event) => setPlantDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium text-slate-700">To Date</span>
+              <input type="date" value={plantDateTo} onChange={(event) => setPlantDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+            </label>
             <div className="flex items-end gap-3">
               <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={plantSortOptions} value={plantSort} onChange={setPlantSort} containerClassName="w-full" clearLabel="Plant A-Z" clearDescription="Reset to the default sort order" />
-              <button type="button" onClick={() => { setPlantFilter(""); setPlantCompanyFilter(""); setPlantManagerFilter(""); setPlantStatusFilter(""); setPlantAddressFilter(""); setPlantSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+              <button type="button" onClick={() => { setPlantFilter(""); setPlantCompanyFilter(""); setPlantManagerFilter(""); setPlantStatusFilter(""); setPlantAddressFilter(""); setPlantDateFrom(""); setPlantDateTo(""); setPlantSort("name-asc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
             </div>
           </div>
           <div className="overflow-hidden rounded-[24px] border border-slate-200">
@@ -4264,9 +4681,14 @@ function AdminMasterDataPage() {
             </div>
           ) : null}
         </SectionCard>
-      </div>
+      ) : null}
 
-      <SectionCard title="Project registry" subtitle="All created projects across the platform">
+      {activeMasterTab === "projects" ? (
+      <SectionCard
+        title="Project registry"
+        subtitle="All created projects across the platform"
+        action={<ExportActions fileBaseName="master-data-projects" filteredRows={filteredProjectExportRows} allRows={allProjectExportRows} />}
+      >
         {loadingProjects ? <div className="text-sm text-slate-500">Loading project registry...</div> : null}
         {!loadingProjects && projectError ? <div className="text-sm text-amber-700">{projectError}</div> : null}
         {!loadingProjects && !projectError ? (
@@ -4277,9 +4699,18 @@ function AdminMasterDataPage() {
               <ValueHelp label="Owner" placeholder="All owners" emptyLabel="No matching owners." options={projectOwnerOptions} value={projectOwnerFilter} onChange={setProjectOwnerFilter} containerClassName="w-full" />
               <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={projectStatusOptions} value={projectStatusFilter} onChange={setProjectStatusFilter} containerClassName="w-full" />
               <ValueHelp label="Code" placeholder="All codes" emptyLabel="No matching codes." options={projectCodeOptions} value={projectCodeFilter} onChange={setProjectCodeFilter} containerClassName="w-full" />
+              <ValueHelp label="Created In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={projectDatePreset} onChange={setProjectDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the created-date filter" />
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">From Date</span>
+                <input type="date" value={projectDateFrom} onChange={(event) => setProjectDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">To Date</span>
+                <input type="date" value={projectDateTo} onChange={(event) => setProjectDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+              </label>
               <div className="flex items-end gap-3">
                 <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={projectSortOptions} value={projectSort} onChange={setProjectSort} containerClassName="w-full" clearLabel="Newest created first" clearDescription="Reset to the default sort order" />
-                <button type="button" onClick={() => { setProjectFilter(""); setProjectPlantFilter(""); setProjectOwnerFilter(""); setProjectStatusFilter(""); setProjectCodeFilter(""); setProjectSort("created-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+                <button type="button" onClick={() => { setProjectFilter(""); setProjectPlantFilter(""); setProjectOwnerFilter(""); setProjectStatusFilter(""); setProjectCodeFilter(""); setProjectDatePreset(""); setProjectDateFrom(""); setProjectDateTo(""); setProjectSort("created-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
               </div>
             </div>
             <div className="overflow-hidden rounded-[24px] border border-slate-200">
@@ -4313,8 +4744,14 @@ function AdminMasterDataPage() {
           </>
         ) : null}
       </SectionCard>
+      ) : null}
 
-      <SectionCard title="Document registry" subtitle="Plant-wise document visibility with edit and delete controls">
+      {activeMasterTab === "documents" ? (
+      <SectionCard
+        title="Document registry"
+        subtitle="Plant-wise document visibility with edit and delete controls"
+        action={<ExportActions fileBaseName="master-data-documents" filteredRows={filteredMasterDocumentExportRows} allRows={allMasterDocumentExportRows} />}
+      >
         <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <ValueHelp label="Document" placeholder="All documents" emptyLabel="No matching documents." options={documentNameOptions} value={documentNameFilter} onChange={setDocumentNameFilter} containerClassName="w-full" />
           <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={documentPlantOptions} value={documentPlantFilter} onChange={setDocumentPlantFilter} containerClassName="w-full" />
@@ -4322,9 +4759,18 @@ function AdminMasterDataPage() {
           <ValueHelp label="Uploader" placeholder="All uploaders" emptyLabel="No matching uploaders." options={documentUploaderOptions} value={documentUploaderFilter} onChange={setDocumentUploaderFilter} containerClassName="w-full" />
           <ValueHelp label="Category" placeholder="All categories" emptyLabel="No matching categories." options={documentCategoryOptions} value={documentCategoryFilter} onChange={setDocumentCategoryFilter} containerClassName="w-full" />
           <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={documentStatusOptions} value={documentStatusFilter} onChange={setDocumentStatusFilter} containerClassName="w-full" />
+          <ValueHelp label="Uploaded In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={documentDatePreset} onChange={setDocumentDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the upload-date filter" />
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">From Date</span>
+            <input type="date" value={documentDateFrom} onChange={(event) => setDocumentDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">To Date</span>
+            <input type="date" value={documentDateTo} onChange={(event) => setDocumentDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+          </label>
           <div className="flex items-end gap-3">
             <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={documentSortOptions} value={documentSort} onChange={setDocumentSort} containerClassName="w-full" clearLabel="Latest uploaded first" clearDescription="Reset to the default sort order" />
-            <button type="button" onClick={() => { setDocumentNameFilter(""); setDocumentPlantFilter(""); setDocumentProjectFilter(""); setDocumentUploaderFilter(""); setDocumentCategoryFilter(""); setDocumentStatusFilter(""); setDocumentSort("uploaded-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+            <button type="button" onClick={() => { setDocumentNameFilter(""); setDocumentPlantFilter(""); setDocumentProjectFilter(""); setDocumentUploaderFilter(""); setDocumentCategoryFilter(""); setDocumentStatusFilter(""); setDocumentDatePreset(""); setDocumentDateFrom(""); setDocumentDateTo(""); setDocumentSort("uploaded-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
           </div>
         </div>
         <div className="overflow-hidden rounded-[24px] border border-slate-200">
@@ -4371,6 +4817,7 @@ function AdminMasterDataPage() {
           </table>
         </div>
       </SectionCard>
+      ) : null}
 
       {selectedDocument ? (
         <DocumentDrawer
@@ -4397,6 +4844,10 @@ function ManagerOversightPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [editor, setEditor] = useState<User | null>(null);
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<User | null>(null);
+  const [resetPasswordDraft, setResetPasswordDraft] = useState("Password123!");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("Password123!");
+  const [resetPasswordError, setResetPasswordError] = useState("");
   const navigate = useNavigate();
   const [draft, setDraft] = useState({ name: "", email: "", assignedPlantIds: [] as string[] });
 
@@ -4514,25 +4965,39 @@ function ManagerOversightPage() {
     }
   }
 
-  async function resetManagerPassword(target: User) {
-    const nextPassword = window.prompt(`Enter a temporary password for ${target.name}. It must be at least 8 characters long.`);
-    if (nextPassword === null) return;
-    const trimmed = nextPassword.trim();
+  function openResetPasswordDialog(target: User) {
+    setResetPasswordTarget(target);
+    setResetPasswordDraft("Password123!");
+    setResetPasswordConfirm("Password123!");
+    setResetPasswordError("");
+    setError("");
+    setMessage("");
+  }
+
+  async function submitResetManagerPassword() {
+    if (!resetPasswordTarget) return;
+    const trimmed = resetPasswordDraft.trim();
+    const confirmed = resetPasswordConfirm.trim();
     if (trimmed.length < 8) {
-      setError("Temporary password must be at least 8 characters long.");
-      setMessage("");
+      setResetPasswordError("Temporary password must be at least 8 characters long.");
+      return;
+    }
+    if (trimmed !== confirmed) {
+      setResetPasswordError("Password confirmation does not match.");
       return;
     }
 
-    setSubmitting(target.id);
+    setSubmitting(resetPasswordTarget.id);
+    setResetPasswordError("");
     setError("");
     setMessage("");
     try {
-      await usersApi.resetPassword(target.id, {
+      await usersApi.resetPassword(resetPasswordTarget.id, {
         newPassword: trimmed,
         confirmPassword: trimmed,
       });
-      setMessage(`Temporary password reset for ${target.name}.`);
+      setMessage(`Temporary password reset for ${resetPasswordTarget.name}.`);
+      setResetPasswordTarget(null);
       await refreshData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to reset password.");
@@ -4706,7 +5171,7 @@ function ManagerOversightPage() {
                       </button>
                       {user.role === "Admin" ? (
                         <button
-                          onClick={() => void resetManagerPassword(candidate)}
+                          onClick={() => openResetPasswordDialog(candidate)}
                           disabled={submitting === candidate.id}
                           className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
                         >
@@ -4778,6 +5243,69 @@ function ManagerOversightPage() {
           </div>
         ) : null}
       </SectionCard>
+      <Dialog
+        open={Boolean(resetPasswordTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setResetPasswordTarget(null);
+            setResetPasswordError("");
+          }
+        }}
+      >
+        <DialogContent className="rounded-[28px] border border-slate-200 bg-white p-0 shadow-[0_28px_80px_rgba(15,23,42,0.18)] sm:max-w-[560px]">
+          <div className="p-6">
+            <DialogHeader className="text-left">
+              <DialogTitle className="text-xl font-semibold text-slate-900">Reset temporary password</DialogTitle>
+              <DialogDescription className="mt-2 text-sm leading-6 text-slate-500">
+                {resetPasswordTarget ? `Set a temporary password for ${resetPasswordTarget.name}. It must be at least 8 characters long.` : "Set a temporary password."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-6 grid gap-4">
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Temporary password</span>
+                <input
+                  type="password"
+                  value={resetPasswordDraft}
+                  onChange={(event) => setResetPasswordDraft(event.target.value)}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                  placeholder="Enter temporary password"
+                />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Confirm password</span>
+                <input
+                  type="password"
+                  value={resetPasswordConfirm}
+                  onChange={(event) => setResetPasswordConfirm(event.target.value)}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                  placeholder="Confirm temporary password"
+                />
+              </label>
+              {resetPasswordError ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{resetPasswordError}</div> : null}
+            </div>
+            <DialogFooter className="mt-6">
+              <button
+                type="button"
+                onClick={() => {
+                  setResetPasswordTarget(null);
+                  setResetPasswordError("");
+                }}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitResetManagerPassword()}
+                disabled={!resetPasswordTarget || submitting === resetPasswordTarget.id}
+                className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+              >
+                {resetPasswordTarget && submitting === resetPasswordTarget.id ? "Resetting..." : "Reset password"}
+              </button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -5039,17 +5567,26 @@ function loginIp(activity: Activity) {
 }
 
 function AdminNetworkPage() {
+  const [activeNetworkTab, setActiveNetworkTab] = useState("rules");
   const [rules, setRules] = useState<IpRule[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState({ label: "", address: "", status: "Allowed" as IpRule["status"] });
   const [ruleSearch, setRuleSearch] = useState("");
   const [ruleStatusFilter, setRuleStatusFilter] = useState("");
+  const [ruleDateFrom, setRuleDateFrom] = useState("");
+  const [ruleDateTo, setRuleDateTo] = useState("");
   const [personaFilter, setPersonaFilter] = useState("");
   const [personaRoleFilter, setPersonaRoleFilter] = useState("");
   const [personaIpFilter, setPersonaIpFilter] = useState("");
+  const [personaDatePreset, setPersonaDatePreset] = useState("");
+  const [personaDateFrom, setPersonaDateFrom] = useState("");
+  const [personaDateTo, setPersonaDateTo] = useState("");
   const [watchIpFilter, setWatchIpFilter] = useState("");
   const [watchRoleFilter, setWatchRoleFilter] = useState("");
+  const [watchDatePreset, setWatchDatePreset] = useState("");
+  const [watchDateFrom, setWatchDateFrom] = useState("");
+  const [watchDateTo, setWatchDateTo] = useState("");
   const [ruleSort, setRuleSort] = useState("updated-desc");
   const [personaSort, setPersonaSort] = useState("last-seen-desc");
   const [watchSort, setWatchSort] = useState("logins-desc");
@@ -5189,9 +5726,11 @@ function AdminNetworkPage() {
     () =>
       rules.filter((rule) => {
         const matchesSearch = !ruleSearch || [rule.label, rule.address].some((value) => normalizeSearchValue(value).includes(normalizeSearchValue(ruleSearch)));
-        return matchesSearch && matchesValueHelpFilter(ruleStatusFilter, rule.status);
+        const matchesFrom = !ruleDateFrom || Boolean(rule.lastUpdated && rule.lastUpdated >= ruleDateFrom);
+        const matchesTo = !ruleDateTo || Boolean(rule.lastUpdated && rule.lastUpdated <= ruleDateTo);
+        return matchesSearch && matchesValueHelpFilter(ruleStatusFilter, rule.status) && matchesFrom && matchesTo;
       }),
-    [ruleSearch, ruleStatusFilter, rules],
+    [ruleDateFrom, ruleDateTo, ruleSearch, ruleStatusFilter, rules],
   );
   const sortedRules = useMemo(() => {
     const next = [...filteredRules];
@@ -5231,9 +5770,12 @@ function AdminNetworkPage() {
       personaSummaries.filter((persona) => (
         matchesValueHelpFilter(personaFilter, persona.name) &&
         matchesValueHelpFilter(personaRoleFilter, persona.role) &&
-        (!personaIpFilter || persona.events.some((event) => loginIp(event) === personaIpFilter))
+        (!personaIpFilter || persona.events.some((event) => loginIp(event) === personaIpFilter)) &&
+        matchesRelativeDatePreset(persona.lastSeen, personaDatePreset) &&
+        (!personaDateFrom || Boolean(persona.lastSeen && persona.lastSeen.slice(0, 10) >= personaDateFrom)) &&
+        (!personaDateTo || Boolean(persona.lastSeen && persona.lastSeen.slice(0, 10) <= personaDateTo))
       )),
-    [personaFilter, personaIpFilter, personaRoleFilter, personaSummaries],
+    [personaDateFrom, personaDatePreset, personaDateTo, personaFilter, personaIpFilter, personaRoleFilter, personaSummaries],
   );
   const sortedPersonas = useMemo(() => {
     const next = [...filteredPersonas];
@@ -5272,9 +5814,12 @@ function AdminNetworkPage() {
     () =>
       ipSummaries.filter((entry) => (
         matchesValueHelpFilter(watchIpFilter, entry.ip) &&
-        (!watchRoleFilter || entry.roles.has(watchRoleFilter))
+        (!watchRoleFilter || entry.roles.has(watchRoleFilter)) &&
+        matchesRelativeDatePreset(entry.lastSeen, watchDatePreset) &&
+        (!watchDateFrom || Boolean(entry.lastSeen && entry.lastSeen.slice(0, 10) >= watchDateFrom)) &&
+        (!watchDateTo || Boolean(entry.lastSeen && entry.lastSeen.slice(0, 10) <= watchDateTo))
       )),
-    [ipSummaries, watchIpFilter, watchRoleFilter],
+    [ipSummaries, watchDateFrom, watchDatePreset, watchDateTo, watchIpFilter, watchRoleFilter],
   );
   const sortedIpSummaries = useMemo(() => {
     const next = [...filteredIpSummaries];
@@ -5293,6 +5838,30 @@ function AdminNetworkPage() {
     });
     return next;
   }, [filteredIpSummaries, watchSort]);
+  const allRuleExportRows = useMemo(
+    () => rules.map((rule) => ({ label: rule.label, address: rule.address, status: rule.status, lastUpdated: rule.lastUpdated })),
+    [rules],
+  );
+  const filteredRuleExportRows = useMemo(
+    () => sortedRules.map((rule) => ({ label: rule.label, address: rule.address, status: rule.status, lastUpdated: rule.lastUpdated })),
+    [sortedRules],
+  );
+  const allPersonaExportRows = useMemo(
+    () => personaSummaries.map((persona) => ({ persona: persona.name, role: persona.role, email: persona.email, logins: persona.total, ipFootprint: Array.from(persona.ips).join(", "), lastSeen: persona.lastSeen })),
+    [personaSummaries],
+  );
+  const filteredPersonaExportRows = useMemo(
+    () => sortedPersonas.map((persona) => ({ persona: persona.name, role: persona.role, email: persona.email, logins: persona.total, ipFootprint: Array.from(persona.ips).join(", "), lastSeen: persona.lastSeen })),
+    [sortedPersonas],
+  );
+  const allWatchlistExportRows = useMemo(
+    () => ipSummaries.map((entry) => ({ ip: entry.ip, logins: entry.total, personas: Array.from(entry.personas).join(", "), roles: Array.from(entry.roles).join(", "), lastSeen: entry.lastSeen })),
+    [ipSummaries],
+  );
+  const filteredWatchlistExportRows = useMemo(
+    () => sortedIpSummaries.map((entry) => ({ ip: entry.ip, logins: entry.total, personas: Array.from(entry.personas).join(", "), roles: Array.from(entry.roles).join(", "), lastSeen: entry.lastSeen })),
+    [sortedIpSummaries],
+  );
 
   return (
     <div className="space-y-6">
@@ -5348,9 +5917,32 @@ function AdminNetworkPage() {
       </section>
 
       <SectionCard
+        title="Network workspace"
+        subtitle="Switch between rule administration, posture snapshots, persona views, and watchlists"
+        action={(
+          <Tabs value={activeNetworkTab} onValueChange={setActiveNetworkTab} className="w-full">
+            <TabsList className="grid w-full max-w-[700px] grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1 md:grid-cols-4">
+              <TabsTrigger value="rules" className="rounded-xl text-sm">IP rules</TabsTrigger>
+              <TabsTrigger value="posture" className="rounded-xl text-sm">Posture</TabsTrigger>
+              <TabsTrigger value="personas" className="rounded-xl text-sm">Personas</TabsTrigger>
+              <TabsTrigger value="watchlist" className="rounded-xl text-sm">Watchlist</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
+      >
+        <div className="text-sm text-slate-500">
+          {activeNetworkTab === "rules" ? "Manage the allow, review, and block inventory in one focused subtab." : null}
+          {activeNetworkTab === "posture" ? "Read the overall security posture without scrolling through lower-level tables." : null}
+          {activeNetworkTab === "personas" ? "Investigate sign-ins by person and role rather than by IP." : null}
+          {activeNetworkTab === "watchlist" ? "Review ingress patterns from the IP-first perspective." : null}
+        </div>
+      </SectionCard>
+
+      {activeNetworkTab === "rules" ? (
+      <SectionCard
         title="IP configuration"
         subtitle="Allow, block, and review network sources"
-        action={<button onClick={() => setShowCreate((current) => !current)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Add new IP configuration</button>}
+        action={<div className="flex flex-wrap justify-end gap-2"><ExportActions fileBaseName="ip-rules" filteredRows={filteredRuleExportRows} allRows={allRuleExportRows} /><button onClick={() => setShowCreate((current) => !current)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Add new IP configuration</button></div>}
       >
         {message ? <div className="mb-4 text-sm text-emerald-700">{message}</div> : null}
         {showCreate ? (
@@ -5396,12 +5988,22 @@ function AdminNetworkPage() {
               clearDescription="Reset to the default sort order"
             />
           </div>
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">From Date</span>
+            <input type="date" value={ruleDateFrom} onChange={(event) => setRuleDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Rule last updated from date" />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">To Date</span>
+            <input type="date" value={ruleDateTo} onChange={(event) => setRuleDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Rule last updated to date" />
+          </label>
           <div className="flex items-end">
             <button
               type="button"
               onClick={() => {
                 setRuleSearch("");
                 setRuleStatusFilter("");
+                setRuleDateFrom("");
+                setRuleDateTo("");
                 setRuleSort("updated-desc");
               }}
               className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
@@ -5448,7 +6050,9 @@ function AdminNetworkPage() {
           </table>
         </div>
       </SectionCard>
+      ) : null}
 
+      {activeNetworkTab === "posture" ? (
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <SectionCard title="Security operations overview" subtitle="At-a-glance posture across configured rules and observed sign-ins">
           {loading ? <div className="text-sm text-slate-500">Loading network telemetry...</div> : null}
@@ -5479,8 +6083,10 @@ function AdminNetworkPage() {
           </div>
         </SectionCard>
       </div>
+      ) : null}
 
-      <SectionCard title="Persona login matrix" subtitle="Every persona with login count, IP spread, and latest observed sign-in">
+      {activeNetworkTab === "personas" ? (
+      <SectionCard title="Persona login matrix" subtitle="Every persona with login count, IP spread, and latest observed sign-in" action={<ExportActions fileBaseName="ip-personas" filteredRows={filteredPersonaExportRows} allRows={allPersonaExportRows} />}>
         {loading ? <div className="text-sm text-slate-500">Collecting persona login activity...</div> : null}
         {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
         {!loading && !activityError && personaSummaries.length === 0 ? <div className="text-sm text-slate-500">No successful login events have been recorded yet.</div> : null}
@@ -5490,9 +6096,18 @@ function AdminNetworkPage() {
               <ValueHelp label="Persona" placeholder="All personas" emptyLabel="No matching personas." options={personaOptions} value={personaFilter} onChange={setPersonaFilter} containerClassName="w-full" />
               <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={personaRoleOptions} value={personaRoleFilter} onChange={setPersonaRoleFilter} containerClassName="w-full" />
               <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={personaIpOptions} value={personaIpFilter} onChange={setPersonaIpFilter} containerClassName="w-full" />
+              <ValueHelp label="Last Seen In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={personaDatePreset} onChange={setPersonaDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the last-seen filter" />
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">From Date</span>
+                <input type="date" value={personaDateFrom} onChange={(event) => setPersonaDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Persona last seen from date" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">To Date</span>
+                <input type="date" value={personaDateTo} onChange={(event) => setPersonaDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Persona last seen to date" />
+              </label>
               <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={personaSortOptions} value={personaSort} onChange={setPersonaSort} containerClassName="w-full" clearLabel="Last seen latest" clearDescription="Reset to the default sort order" />
               <div className="flex items-end">
-                <button type="button" onClick={() => { setPersonaFilter(""); setPersonaRoleFilter(""); setPersonaIpFilter(""); setPersonaSort("last-seen-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+                <button type="button" onClick={() => { setPersonaFilter(""); setPersonaRoleFilter(""); setPersonaIpFilter(""); setPersonaDatePreset(""); setPersonaDateFrom(""); setPersonaDateTo(""); setPersonaSort("last-seen-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
               </div>
             </div>
             <div className="overflow-hidden rounded-[28px] border border-slate-200">
@@ -5527,8 +6142,10 @@ function AdminNetworkPage() {
           </>
         ) : null}
       </SectionCard>
+      ) : null}
 
-      <SectionCard title="Ingress watchlist" subtitle="IP-centric view of who is entering the platform and how often">
+      {activeNetworkTab === "watchlist" ? (
+      <SectionCard title="Ingress watchlist" subtitle="IP-centric view of who is entering the platform and how often" action={<ExportActions fileBaseName="ip-watchlist" filteredRows={filteredWatchlistExportRows} allRows={allWatchlistExportRows} />}>
           {loading ? <div className="text-sm text-slate-500">Collecting persona login activity...</div> : null}
         {!loading && activityError ? <div className="text-sm text-[#BB0000]">{activityError}</div> : null}
         {!loading && !activityError && ipSummaries.length === 0 ? <div className="text-sm text-slate-500">No IP activity is available yet.</div> : null}
@@ -5537,9 +6154,18 @@ function AdminNetworkPage() {
             <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
               <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={watchIpOptions} value={watchIpFilter} onChange={setWatchIpFilter} containerClassName="w-full" />
               <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={watchRoleOptions} value={watchRoleFilter} onChange={setWatchRoleFilter} containerClassName="w-full" />
+              <ValueHelp label="Last Seen In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={watchDatePreset} onChange={setWatchDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the last-seen filter" />
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">From Date</span>
+                <input type="date" value={watchDateFrom} onChange={(event) => setWatchDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Watchlist last seen from date" />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">To Date</span>
+                <input type="date" value={watchDateTo} onChange={(event) => setWatchDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Watchlist last seen to date" />
+              </label>
               <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={watchSortOptions} value={watchSort} onChange={setWatchSort} containerClassName="w-full" clearLabel="Most logins first" clearDescription="Reset to the default sort order" />
               <div className="flex items-end">
-                <button type="button" onClick={() => { setWatchIpFilter(""); setWatchRoleFilter(""); setWatchSort("logins-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+                <button type="button" onClick={() => { setWatchIpFilter(""); setWatchRoleFilter(""); setWatchDatePreset(""); setWatchDateFrom(""); setWatchDateTo(""); setWatchSort("logins-desc"); }} className="h-11 w-full min-w-[124px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
               </div>
             </div>
             <div className="overflow-hidden rounded-[28px] border border-slate-200">
@@ -5570,6 +6196,7 @@ function AdminNetworkPage() {
           </>
         ) : null}
       </SectionCard>
+      ) : null}
     </div>
   );
 }
@@ -5587,10 +6214,19 @@ function AdminSessionsPage() {
   const [sessionRoleFilter, setSessionRoleFilter] = useState("");
   const [sessionStatusFilter, setSessionStatusFilter] = useState("");
   const [sessionIpFilter, setSessionIpFilter] = useState("");
+  const [sessionDatePreset, setSessionDatePreset] = useState("");
+  const [sessionDateFrom, setSessionDateFrom] = useState("");
+  const [sessionDateTo, setSessionDateTo] = useState("");
   const [outsideUserFilter, setOutsideUserFilter] = useState("");
   const [outsideIpFilter, setOutsideIpFilter] = useState("");
+  const [outsideDatePreset, setOutsideDatePreset] = useState("");
+  const [outsideDateFrom, setOutsideDateFrom] = useState("");
+  const [outsideDateTo, setOutsideDateTo] = useState("");
   const [blockedUserFilter, setBlockedUserFilter] = useState("");
   const [blockedIpFilter, setBlockedIpFilter] = useState("");
+  const [blockedDatePreset, setBlockedDatePreset] = useState("");
+  const [blockedDateFrom, setBlockedDateFrom] = useState("");
+  const [blockedDateTo, setBlockedDateTo] = useState("");
   const [sessionSort, setSessionSort] = useState("started-desc");
   const [outsideSessionSort, setOutsideSessionSort] = useState("started-desc");
   const [blockedAttemptSort, setBlockedAttemptSort] = useState("attempted-desc");
@@ -5637,9 +6273,12 @@ function AdminSessionsPage() {
         matchesValueHelpFilter(sessionUserFilter, session.userName || undefined) &&
         matchesValueHelpFilter(sessionRoleFilter, session.userRole || undefined) &&
         matchesValueHelpFilter(sessionStatusFilter, session.status) &&
-        matchesValueHelpFilter(sessionIpFilter, session.clientIp)
+        matchesValueHelpFilter(sessionIpFilter, session.clientIp) &&
+        matchesRelativeDatePreset(session.startedAt, sessionDatePreset) &&
+        (!sessionDateFrom || Boolean(session.startedAt && session.startedAt.slice(0, 10) >= sessionDateFrom)) &&
+        (!sessionDateTo || Boolean(session.startedAt && session.startedAt.slice(0, 10) <= sessionDateTo))
       )),
-    [sessionIpFilter, sessionRoleFilter, sessionStatusFilter, sessionUserFilter, sessions],
+    [sessionDateFrom, sessionDatePreset, sessionDateTo, sessionIpFilter, sessionRoleFilter, sessionStatusFilter, sessionUserFilter, sessions],
   );
   const sortedSessions = useMemo(() => {
     const next = [...filteredSessions];
@@ -5674,9 +6313,12 @@ function AdminSessionsPage() {
     () =>
       outsideHoursSessions.filter((session) => (
         matchesValueHelpFilter(outsideUserFilter, session.userName || undefined) &&
-        matchesValueHelpFilter(outsideIpFilter, session.clientIp)
+        matchesValueHelpFilter(outsideIpFilter, session.clientIp) &&
+        matchesRelativeDatePreset(session.startedAt, outsideDatePreset) &&
+        (!outsideDateFrom || Boolean(session.startedAt && session.startedAt.slice(0, 10) >= outsideDateFrom)) &&
+        (!outsideDateTo || Boolean(session.startedAt && session.startedAt.slice(0, 10) <= outsideDateTo))
       )),
-    [outsideHoursSessions, outsideIpFilter, outsideUserFilter],
+    [outsideDateFrom, outsideDatePreset, outsideDateTo, outsideHoursSessions, outsideIpFilter, outsideUserFilter],
   );
   const sortedOutsideSessions = useMemo(() => {
     const next = [...filteredOutsideSessions];
@@ -5707,9 +6349,12 @@ function AdminSessionsPage() {
     () =>
       outsideHoursAttempts.filter((attempt) => (
         matchesValueHelpFilter(blockedUserFilter, attempt.userName || undefined) &&
-        matchesValueHelpFilter(blockedIpFilter, attempt.clientIp)
+        matchesValueHelpFilter(blockedIpFilter, attempt.clientIp) &&
+        matchesRelativeDatePreset(attempt.occurredAt, blockedDatePreset) &&
+        (!blockedDateFrom || Boolean(attempt.occurredAt && attempt.occurredAt.slice(0, 10) >= blockedDateFrom)) &&
+        (!blockedDateTo || Boolean(attempt.occurredAt && attempt.occurredAt.slice(0, 10) <= blockedDateTo))
       )),
-    [blockedIpFilter, blockedUserFilter, outsideHoursAttempts],
+    [blockedDateFrom, blockedDatePreset, blockedDateTo, blockedIpFilter, blockedUserFilter, outsideHoursAttempts],
   );
   const sortedBlockedAttempts = useMemo(() => {
     const next = [...filteredBlockedAttempts];
@@ -5726,21 +6371,48 @@ function AdminSessionsPage() {
     });
     return next;
   }, [blockedAttemptSort, filteredBlockedAttempts]);
+  const allSessionExportRows = useMemo(
+    () => sessions.map((session) => ({ user: session.userName, email: session.userEmail, role: session.userRole, status: session.status, ip: session.clientIp, startedAt: session.startedAt, lastSeenAt: session.lastSeenAt, durationSeconds: session.durationSeconds, idleSeconds: session.idleSeconds, device: session.device, browser: session.browser, sessionId: session.sessionId })),
+    [sessions],
+  );
+  const filteredSessionExportRows = useMemo(
+    () => sortedSessions.map((session) => ({ user: session.userName, email: session.userEmail, role: session.userRole, status: session.status, ip: session.clientIp, startedAt: session.startedAt, lastSeenAt: session.lastSeenAt, durationSeconds: session.durationSeconds, idleSeconds: session.idleSeconds, device: session.device, browser: session.browser, sessionId: session.sessionId })),
+    [sortedSessions],
+  );
+  const allOutsideSessionExportRows = useMemo(
+    () => outsideHoursSessions.map((session) => ({ user: session.userName, role: session.userRole, ip: session.clientIp, startedAt: session.startedAt, durationSeconds: session.durationSeconds, device: session.device, browser: session.browser, sessionId: session.sessionId })),
+    [outsideHoursSessions],
+  );
+  const filteredOutsideSessionExportRows = useMemo(
+    () => sortedOutsideSessions.map((session) => ({ user: session.userName, role: session.userRole, ip: session.clientIp, startedAt: session.startedAt, durationSeconds: session.durationSeconds, device: session.device, browser: session.browser, sessionId: session.sessionId })),
+    [sortedOutsideSessions],
+  );
+  const allBlockedAttemptExportRows = useMemo(
+    () => outsideHoursAttempts.map((attempt) => ({ user: attempt.userName, role: attempt.userRole, ip: attempt.clientIp, attemptedAt: attempt.occurredAt, device: attempt.device, browser: attempt.browser, status: attempt.status })),
+    [outsideHoursAttempts],
+  );
+  const filteredBlockedAttemptExportRows = useMemo(
+    () => sortedBlockedAttempts.map((attempt) => ({ user: attempt.userName, role: attempt.userRole, ip: attempt.clientIp, attemptedAt: attempt.occurredAt, device: attempt.device, browser: attempt.browser, status: attempt.status })),
+    [sortedBlockedAttempts],
+  );
 
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Admin", to: "/admin" }, { label: "Sessions" }]} />
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <SectionCard
-          title="Admin session controls"
-          subtitle="Switch between general session policy settings and outside-hours monitoring without leaving this page"
+          title="Session workspace"
+          subtitle="Use subtabs to jump between policy controls, off-hours monitoring, and the live session inventory"
           action={(
-            <TabsList className="grid w-full max-w-[460px] grid-cols-2 rounded-2xl bg-slate-100 p-1">
+            <TabsList className="grid w-full max-w-[620px] grid-cols-3 rounded-2xl bg-slate-100 p-1">
               <TabsTrigger value="session-policies" className="rounded-xl text-sm">
-                Session policies
+                Policies
               </TabsTrigger>
               <TabsTrigger value="outside-business-hours" className="rounded-xl text-sm">
-                Outside business hours
+                Off-hours
+              </TabsTrigger>
+              <TabsTrigger value="live-sessions" className="rounded-xl text-sm">
+                Live sessions
               </TabsTrigger>
             </TabsList>
           )}
@@ -5786,14 +6458,17 @@ function AdminSessionsPage() {
 
                 <div className="mt-6 grid gap-6 xl:grid-cols-2">
                   <div className="space-y-4">
-                    <div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div>
+                    <div className="flex flex-wrap items-center justify-between gap-3"><div className="text-base font-semibold text-slate-900">Flagged off-hours sessions</div><ExportActions fileBaseName="outside-hours-sessions" filteredRows={filteredOutsideSessionExportRows} allRows={allOutsideSessionExportRows} /></div>
                     <div className="grid gap-4 md:grid-cols-3">
                       <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={outsideUserOptions} value={outsideUserFilter} onChange={setOutsideUserFilter} containerClassName="w-full" />
                       <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={outsideSessionSortOptions} value={outsideSessionSort} onChange={setOutsideSessionSort} containerClassName="w-full" clearLabel="Latest started first" clearDescription="Reset to the default sort order" />
                       <div className="flex items-end gap-3">
                         <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={outsideIpOptions} value={outsideIpFilter} onChange={setOutsideIpFilter} containerClassName="w-full" />
-                        <button type="button" onClick={() => { setOutsideUserFilter(""); setOutsideIpFilter(""); setOutsideSessionSort("started-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+                        <button type="button" onClick={() => { setOutsideUserFilter(""); setOutsideIpFilter(""); setOutsideDatePreset(""); setOutsideDateFrom(""); setOutsideDateTo(""); setOutsideSessionSort("started-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
                       </div>
+                      <ValueHelp label="Started In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={outsideDatePreset} onChange={setOutsideDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the started-date filter" />
+                      <input type="date" value={outsideDateFrom} onChange={(event) => setOutsideDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Off-hours session from date" />
+                      <input type="date" value={outsideDateTo} onChange={(event) => setOutsideDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Off-hours session to date" />
                     </div>
                     <div className="overflow-hidden rounded-[28px] border border-amber-200">
                       <table className="min-w-full divide-y divide-amber-100">
@@ -5825,14 +6500,17 @@ function AdminSessionsPage() {
                   </div>
 
                   <div className="space-y-4">
-                    <div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div>
+                    <div className="flex flex-wrap items-center justify-between gap-3"><div className="text-base font-semibold text-slate-900">Blocked outside-hours login attempts</div><ExportActions fileBaseName="outside-hours-blocked-attempts" filteredRows={filteredBlockedAttemptExportRows} allRows={allBlockedAttemptExportRows} /></div>
                     <div className="grid gap-4 md:grid-cols-3">
                       <ValueHelp label="User" placeholder="All users" emptyLabel="No matching users." options={blockedUserOptions} value={blockedUserFilter} onChange={setBlockedUserFilter} containerClassName="w-full" />
                       <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={blockedAttemptSortOptions} value={blockedAttemptSort} onChange={setBlockedAttemptSort} containerClassName="w-full" clearLabel="Latest attempted first" clearDescription="Reset to the default sort order" />
                       <div className="flex items-end gap-3">
                         <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={blockedIpOptions} value={blockedIpFilter} onChange={setBlockedIpFilter} containerClassName="w-full" />
-                        <button type="button" onClick={() => { setBlockedUserFilter(""); setBlockedIpFilter(""); setBlockedAttemptSort("attempted-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
+                        <button type="button" onClick={() => { setBlockedUserFilter(""); setBlockedIpFilter(""); setBlockedDatePreset(""); setBlockedDateFrom(""); setBlockedDateTo(""); setBlockedAttemptSort("attempted-desc"); }} className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear</button>
                       </div>
+                      <ValueHelp label="Attempted In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={blockedDatePreset} onChange={setBlockedDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the attempted-date filter" />
+                      <input type="date" value={blockedDateFrom} onChange={(event) => setBlockedDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Blocked attempt from date" />
+                      <input type="date" value={blockedDateTo} onChange={(event) => setBlockedDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Blocked attempt to date" />
                     </div>
                     <div className="overflow-hidden rounded-[28px] border border-rose-200">
                       <table className="min-w-full divide-y divide-rose-100">
@@ -5869,7 +6547,8 @@ function AdminSessionsPage() {
         </SectionCard>
       </Tabs>
 
-      <SectionCard title="Live session monitor" subtitle="Detailed session visibility across logins, active presence, and exits">
+      {activeTab === "live-sessions" ? (
+      <SectionCard title="Live session monitor" subtitle="Detailed session visibility across logins, active presence, and exits" action={<ExportActions fileBaseName="sessions" filteredRows={filteredSessionExportRows} allRows={allSessionExportRows} />}>
         {loadingSessions ? <div className="text-sm text-slate-500">Loading session inventory...</div> : null}
         {!loadingSessions && sessionError ? <div className="text-sm text-[#BB0000]">{sessionError}</div> : null}
         {!loadingSessions && !sessionError ? (
@@ -5886,9 +6565,12 @@ function AdminSessionsPage() {
               <ValueHelp label="Role" placeholder="All roles" emptyLabel="No matching roles." options={sessionRoleOptions} value={sessionRoleFilter} onChange={setSessionRoleFilter} containerClassName="w-full" />
               <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={sessionStatusOptions} value={sessionStatusFilter} onChange={setSessionStatusFilter} containerClassName="w-full" />
               <ValueHelp label="IP" placeholder="All IPs" emptyLabel="No matching IPs." options={sessionIpOptions} value={sessionIpFilter} onChange={setSessionIpFilter} containerClassName="w-full" />
+              <ValueHelp label="Started In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={sessionDatePreset} onChange={setSessionDatePreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the started-date filter" />
+              <input type="date" value={sessionDateFrom} onChange={(event) => setSessionDateFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Session from date" />
+              <input type="date" value={sessionDateTo} onChange={(event) => setSessionDateTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-teal-500" aria-label="Session to date" />
               <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={sessionSortOptions} value={sessionSort} onChange={setSessionSort} containerClassName="w-full" clearLabel="Latest started first" clearDescription="Reset to the default sort order" />
               <div className="flex items-end">
-                <button type="button" onClick={() => { setSessionUserFilter(""); setSessionRoleFilter(""); setSessionStatusFilter(""); setSessionIpFilter(""); setSessionSort("started-desc"); }} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear session filters</button>
+                <button type="button" onClick={() => { setSessionUserFilter(""); setSessionRoleFilter(""); setSessionStatusFilter(""); setSessionIpFilter(""); setSessionDatePreset(""); setSessionDateFrom(""); setSessionDateTo(""); setSessionSort("started-desc"); }} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Clear session filters</button>
               </div>
             </div>
 
@@ -5933,6 +6615,7 @@ function AdminSessionsPage() {
           </>
         ) : null}
       </SectionCard>
+      ) : null}
     </div>
   );
 }

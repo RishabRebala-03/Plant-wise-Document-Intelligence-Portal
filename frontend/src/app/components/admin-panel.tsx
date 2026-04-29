@@ -3,22 +3,84 @@ import { Pencil, Ban, UserPlus } from "lucide-react";
 import { plantsApi, usersApi } from "../lib/api";
 import type { Plant, User } from "../lib/types";
 
+const DATE_PRESET_OPTIONS = [
+  { value: "", label: "Any time" },
+  { value: "1m", label: "Last 1 month" },
+  { value: "3m", label: "Last 3 months" },
+  { value: "6m", label: "Last 6 months" },
+  { value: "1y", label: "Last 1 year" },
+];
+
+function formatUserDate(value?: string | null) {
+  if (!value) return "Not available";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Not available";
+  return parsed.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function AdminPanel() {
   const [users, setUsers] = useState<User[]>([]);
   const [plants, setPlants] = useState<Plant[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newUser, setNewUser] = useState({ name: "", email: "", role: "Mining Manager", plantId: "" });
   const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [plantFilter, setPlantFilter] = useState("");
+  const [dateField, setDateField] = useState<"created" | "updated">("created");
+  const [datePreset, setDatePreset] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  function resolveDatePreset(preset: string) {
+    if (!preset) return { from: dateFrom || undefined, to: dateTo || undefined };
+    const now = new Date();
+    const end = now.toISOString().slice(0, 10);
+    const start = new Date(now);
+    if (preset === "1m") start.setMonth(start.getMonth() - 1);
+    else if (preset === "3m") start.setMonth(start.getMonth() - 3);
+    else if (preset === "6m") start.setMonth(start.getMonth() - 6);
+    else if (preset === "1y") start.setFullYear(start.getFullYear() - 1);
+    return { from: start.toISOString().slice(0, 10), to: end };
+  }
 
   async function load() {
-    const [usersResult, plantsResult] = await Promise.all([usersApi.list(), plantsApi.list()]);
+    const resolvedDateRange = resolveDatePreset(datePreset);
+    const [usersResult, plantsResult] = await Promise.all([
+      usersApi.list({
+        q: search || undefined,
+        status: statusFilter || undefined,
+        role: roleFilter || undefined,
+        plantId: plantFilter || undefined,
+        dateField,
+        dateFrom: resolvedDateRange.from,
+        dateTo: resolvedDateRange.to,
+      }),
+      plantsApi.list(),
+    ]);
     setUsers(usersResult);
     setPlants(plantsResult.items);
   }
 
   useEffect(() => {
     load().catch((err) => setMessage(err instanceof Error ? err.message : "Unable to load admin data."));
-  }, []);
+  }, [search, statusFilter, roleFilter, plantFilter, dateField, dateFrom, datePreset, dateTo]);
+
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setRoleFilter("");
+    setPlantFilter("");
+    setDateField("created");
+    setDatePreset("");
+    setDateFrom("");
+    setDateTo("");
+  }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -90,7 +152,74 @@ export function AdminPanel() {
 
       <div className="data-table-panel">
         <div className="px-4 py-3 border-b border-[#d9d9d9]">
-          <h3 className="text-[#333]" style={{ fontSize: 14, fontWeight: 500 }}>All Users</h3>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h3 className="text-[#333]" style={{ fontSize: 14, fontWeight: 500 }}>All Users</h3>
+              <p className="text-[#6a6d70]" style={{ fontSize: 12 }}>
+                Filter users by registration or last update date to narrow admin reviews.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name or email"
+                className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]"
+              />
+              <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]">
+                <option value="">All Roles</option>
+                <option value="CEO">CEO</option>
+                <option value="Mining Manager">Mining Manager</option>
+                <option value="Admin">Admin</option>
+              </select>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]">
+                <option value="">All Statuses</option>
+                <option value="Active">Active</option>
+                <option value="Disabled">Disabled</option>
+              </select>
+              <select value={plantFilter} onChange={(e) => setPlantFilter(e.target.value)} className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]">
+                <option value="">All Plants</option>
+                {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name}</option>)}
+              </select>
+              <select value={dateField} onChange={(e) => setDateField(e.target.value as "created" | "updated")} className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]">
+                <option value="created">Registration Date</option>
+                <option value="updated">Last Updated Date</option>
+              </select>
+              <select value={datePreset} onChange={(e) => setDatePreset(e.target.value)} className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]">
+                {DATE_PRESET_OPTIONS.map((option) => <option key={option.value || "any"} value={option.value}>{option.label}</option>)}
+              </select>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => {
+                  setDatePreset("");
+                  setDateFrom(e.target.value);
+                }}
+                className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]"
+                aria-label="Filter from date"
+                disabled={Boolean(datePreset)}
+              />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => {
+                  setDatePreset("");
+                  setDateTo(e.target.value);
+                }}
+                className="h-9 px-3 border border-[#d9d9d9] bg-white text-[#333]"
+                aria-label="Filter to date"
+                disabled={Boolean(datePreset)}
+              />
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="h-9 px-4 border border-[#d9d9d9] text-[#333] hover:bg-[#f5f5f5] cursor-pointer"
+                style={{ fontSize: 12, fontWeight: 500 }}
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
         </div>
         <div className="data-table-scroll">
           <table className="data-table" style={{ fontSize: 13 }}>
@@ -100,6 +229,8 @@ export function AdminPanel() {
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Role</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Email</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Plant</th>
+                <th className="px-4 py-2" style={{ fontWeight: 500 }}>Created</th>
+                <th className="px-4 py-2" style={{ fontWeight: 500 }}>Updated</th>
                 <th className="px-4 py-2" style={{ fontWeight: 500 }}>Actions</th>
               </tr>
             </thead>
@@ -110,6 +241,8 @@ export function AdminPanel() {
                   <td className="px-4 py-2.5">{user.role}</td>
                   <td className="px-4 py-2.5 text-[#6a6d70]">{user.email}</td>
                   <td className="px-4 py-2.5 text-[#6a6d70]">{user.plant || "All"}</td>
+                  <td className="px-4 py-2.5 text-[#6a6d70]">{formatUserDate(user.createdAt)}</td>
+                  <td className="px-4 py-2.5 text-[#6a6d70]">{formatUserDate(user.updatedAt)}</td>
                   <td className="px-4 py-2.5 flex gap-3">
                     <button className="text-[#0A6ED1] hover:underline inline-flex items-center gap-1 cursor-pointer" style={{ fontSize: 12 }}>
                       <Pencil size={12} /> View
@@ -120,6 +253,13 @@ export function AdminPanel() {
                   </td>
                 </tr>
               ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-center text-[#6a6d70]">
+                    No users matched the current filters.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
