@@ -846,9 +846,12 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
         [
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
+          { label: "Projects", path: "/projects", icon: FolderKanban },
           { label: "Documents", path: "/documents", icon: FileText },
           { label: "Analytics", path: "/analytics", icon: LineChartIcon },
+          { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
           { label: "Audit Logs", path: "/activity-logs", icon: Clock3 },
+          { label: "Sessions", path: "/admin/sessions", icon: Clock3 },
           ...governance,
         ],
         common,
@@ -859,6 +862,7 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
         [
           { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
           { label: "Plants", path: "/plants", icon: Building2 },
+          { label: "Projects", path: "/projects", icon: FolderKanban },
           { label: "Documents", path: "/documents", icon: FileText },
           { label: "Project Creation", path: `/plants/${primaryPlantId(user)}/projects/new`, icon: Plus, capability: "canCreateProjects" },
           { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
@@ -869,8 +873,13 @@ function Shell({ onLogout, session }: { onLogout: () => void; session: SessionUi
     return [
       [
         { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard },
+        { label: "Plants", path: "/plants", icon: Building2 },
+        { label: "Projects", path: "/projects", icon: FolderKanban },
         { label: "Documents", path: "/documents", icon: FileText },
+        { label: "Analytics", path: "/analytics", icon: LineChartIcon },
+        { label: "Upload", path: "/upload", icon: Upload, capability: "canUploadDocuments" },
         { label: "Users", path: "/admin/users", icon: Users, capability: "canManageUsers" },
+        { label: "Manager Access", path: "/oversight", icon: UserCog, capability: "canManageUsers" },
         { label: "Master Data", path: "/admin/master-data", icon: Database, capability: "canManageUsers" },
         { label: "Access Control", path: "/admin/access", icon: ShieldCheck },
         { label: "IP Configuration", path: "/admin/network", icon: Network, capability: "canConfigureIp" },
@@ -1768,6 +1777,205 @@ function PlantProjectsPage() {
   );
 }
 
+function ProjectsPage() {
+  const { user, plants, projects, documents } = usePortal();
+  const { can } = useRoleAccess();
+  const navigate = useNavigate();
+  const [projectFilter, setProjectFilter] = useState("");
+  const [plantFilter, setPlantFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [codeFilter, setCodeFilter] = useState("");
+  const [createdPreset, setCreatedPreset] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const [projectSort, setProjectSort] = useState("created-desc");
+
+  const projectNameOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.name), "Project"), [projects]);
+  const projectPlantOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.plantName), "Plant"), [projects]);
+  const projectOwnerOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.owner), "Owner"), [projects]);
+  const projectStatusOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.status), "Status"), [projects]);
+  const projectCodeOptions = useMemo(() => buildValueHelpOptions(projects.map((project) => project.code), "Code"), [projects]);
+  const projectSortOptions = useMemo(
+    () => [
+      { value: "created-desc", label: "Newest created first", meta: "Sort" },
+      { value: "created-asc", label: "Oldest created first", meta: "Sort" },
+      { value: "name-asc", label: "Project A-Z", meta: "Sort" },
+      { value: "plant-asc", label: "Plant A-Z", meta: "Sort" },
+      { value: "owner-asc", label: "Owner A-Z", meta: "Sort" },
+      { value: "status-asc", label: "Status A-Z", meta: "Sort" },
+      { value: "documents-desc", label: "Most documents first", meta: "Sort" },
+      { value: "due-asc", label: "Earliest due date", meta: "Sort" },
+    ],
+    [],
+  );
+
+  const filteredProjects = useMemo(() => projects.filter((project) =>
+    matchesValueHelpFilter(projectFilter, project.name)
+    && matchesValueHelpFilter(plantFilter, project.plantName)
+    && matchesValueHelpFilter(ownerFilter, project.owner)
+    && matchesValueHelpFilter(statusFilter, project.status)
+    && matchesValueHelpFilter(codeFilter, project.code)
+    && matchesRelativeDatePreset(project.createdAt, createdPreset)
+    && (!createdFrom || Boolean(project.createdAt && project.createdAt.slice(0, 10) >= createdFrom))
+    && (!createdTo || Boolean(project.createdAt && project.createdAt.slice(0, 10) <= createdTo))
+  ), [codeFilter, createdFrom, createdPreset, createdTo, ownerFilter, plantFilter, projectFilter, projects, statusFilter]);
+
+  const sortedProjects = useMemo(() => {
+    const next = [...filteredProjects];
+    next.sort((left, right) => {
+      switch (projectSort) {
+        case "created-asc":
+          return compareDateValue(left.createdAt, right.createdAt) || compareText(left.name, right.name);
+        case "name-asc":
+          return compareText(left.name, right.name);
+        case "plant-asc":
+          return compareText(left.plantName, right.plantName) || compareText(left.name, right.name);
+        case "owner-asc":
+          return compareText(left.owner, right.owner) || compareText(left.name, right.name);
+        case "status-asc":
+          return compareText(left.status, right.status) || compareText(left.name, right.name);
+        case "documents-desc":
+          return compareNumber(right.documentIds.length, left.documentIds.length) || compareText(left.name, right.name);
+        case "due-asc":
+          return compareDateValue(left.dueDate, right.dueDate) || compareText(left.name, right.name);
+        case "created-desc":
+        default:
+          return compareDateValue(right.createdAt, left.createdAt) || compareText(left.name, right.name);
+      }
+    });
+    return next;
+  }, [filteredProjects, projectSort]);
+
+  const projectExportRows = useMemo(
+    () => sortedProjects.map((project) => ({
+      project: project.name,
+      code: project.code,
+      plant: project.plantName,
+      owner: project.owner,
+      status: project.status,
+      createdAt: project.createdAt,
+      dueDate: project.dueDate,
+      documents: project.documentIds.length,
+    })),
+    [sortedProjects],
+  );
+  const allProjectExportRows = useMemo(
+    () => projects.map((project) => ({
+      project: project.name,
+      code: project.code,
+      plant: project.plantName,
+      owner: project.owner,
+      status: project.status,
+      createdAt: project.createdAt,
+      dueDate: project.dueDate,
+      documents: project.documentIds.length,
+    })),
+    [projects],
+  );
+  const projectDocumentCount = useMemo(
+    () => sortedProjects.reduce((total, project) => total + documents.filter((document) => document.projectId === project.id).length, 0),
+    [documents, sortedProjects],
+  );
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={[{ label: "Projects" }]} />
+      <SectionCard
+        title="Projects workspace"
+        subtitle="Cross-plant project registry with scope-aware filtering, sorting, and drilldown into project documents"
+        action={<ExportActions fileBaseName="projects-workspace" filteredRows={projectExportRows} allRows={allProjectExportRows} />}
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Projects" value={sortedProjects.length} hint="Projects matching the current filters." icon={FolderKanban} tone="blue" />
+          <MetricCard label="Total in scope" value={projects.length} hint="All projects visible for your role scope." icon={Database} tone="teal" />
+          <MetricCard label="Project docs" value={projectDocumentCount} hint="Documents tied to the filtered project list." icon={FileText} tone="amber" />
+          <MetricCard label="Create access" value={can("canCreateProjects") ? "Enabled" : "Disabled"} hint="Managers can create inside assigned plants. Admins keep global visibility." icon={Plus} tone="rose" />
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <ValueHelp label="Project" placeholder="All projects" emptyLabel="No matching projects." options={projectNameOptions} value={projectFilter} onChange={setProjectFilter} containerClassName="w-full" />
+          <ValueHelp label="Plant" placeholder="All plants" emptyLabel="No matching plants." options={projectPlantOptions} value={plantFilter} onChange={setPlantFilter} containerClassName="w-full" />
+          <ValueHelp label="Owner" placeholder="All owners" emptyLabel="No matching owners." options={projectOwnerOptions} value={ownerFilter} onChange={setOwnerFilter} containerClassName="w-full" />
+          <ValueHelp label="Status" placeholder="All statuses" emptyLabel="No matching statuses." options={projectStatusOptions} value={statusFilter} onChange={setStatusFilter} containerClassName="w-full" />
+          <ValueHelp label="Code" placeholder="All codes" emptyLabel="No matching codes." options={projectCodeOptions} value={codeFilter} onChange={setCodeFilter} containerClassName="w-full" />
+          <ValueHelp label="Created In" placeholder="Any time" emptyLabel="No matching date ranges." options={RELATIVE_DATE_PRESET_OPTIONS} value={createdPreset} onChange={setCreatedPreset} containerClassName="w-full" clearLabel="Any time" clearDescription="Remove the created-date preset" />
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">From Date</span>
+            <input type="date" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+          </label>
+          <label className="space-y-2 text-sm">
+            <span className="font-medium text-slate-700">To Date</span>
+            <input type="date" value={createdTo} onChange={(event) => setCreatedTo(event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500" />
+          </label>
+          <ValueHelp label="Sort By" placeholder="Default sort" emptyLabel="No sorting options." options={projectSortOptions} value={projectSort} onChange={setProjectSort} containerClassName="w-full" clearLabel="Newest created first" clearDescription="Reset to the default sort order" />
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setProjectFilter("");
+                setPlantFilter("");
+                setOwnerFilter("");
+                setStatusFilter("");
+                setCodeFilter("");
+                setCreatedPreset("");
+                setCreatedFrom("");
+                setCreatedTo("");
+                setProjectSort("created-desc");
+              }}
+              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 overflow-hidden rounded-[24px] border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-sm text-slate-500">
+                <th className="px-4 py-3 font-medium">Project</th>
+                <th className="px-4 py-3 font-medium">Plant</th>
+                <th className="px-4 py-3 font-medium">Owner</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Created</th>
+                <th className="px-4 py-3 font-medium">Due</th>
+                <th className="px-4 py-3 font-medium">Documents</th>
+                <th className="px-4 py-3 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white text-sm">
+              {sortedProjects.map((project) => (
+                <tr key={project.id}>
+                  <td className="px-4 py-4">
+                    <div className="font-medium text-slate-900">{project.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">{project.code || project.id}</div>
+                  </td>
+                  <td className="px-4 py-4 text-slate-600">{project.plantName}</td>
+                  <td className="px-4 py-4 text-slate-600">{project.owner}</td>
+                  <td className="px-4 py-4 text-slate-600">{project.status}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDate(project.createdAt)}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDate(project.dueDate)}</td>
+                  <td className="px-4 py-4 text-slate-600">{project.documentIds.length}</td>
+                  <td className="px-4 py-4">
+                    <button
+                      onClick={() => navigate(`/plants/${project.plantId}/projects/${project.id}/documents`)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Open documents
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!sortedProjects.length ? <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-500">No projects matched the current filters.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
 function ProjectCreatePage() {
   const { plantId } = useParams();
   const { user, plants, createProjectRecord } = usePortal();
@@ -1875,6 +2083,10 @@ function DocumentsPage() {
 function ProjectDocumentsPage() {
   const { projectId, plantId } = useParams();
   return <DocumentsWorkspace scopedProjectId={projectId} scopedPlantId={plantId} />;
+}
+
+function ProjectsIndexPage() {
+  return <ProjectsPage />;
 }
 
 function DocumentsWorkspace({ scopedProjectId, scopedPlantId }: { scopedProjectId?: string; scopedPlantId?: string }) {
@@ -5169,7 +5381,7 @@ function ManagerOversightPage() {
                       >
                         {candidate.status === "Active" ? "Mark inactive" : "Reactivate"}
                       </button>
-                      {user.role === "Admin" ? (
+                      {user.role === "Admin" || user.role === "CEO" ? (
                         <button
                           onClick={() => openResetPasswordDialog(candidate)}
                           disabled={submitting === candidate.id}
@@ -5315,6 +5527,20 @@ function ManagerDetailPage() {
   const { user, users, plants, documents } = usePortal();
   const navigate = useNavigate();
   const target = users.find((candidate) => candidate.id === userId && candidate.role === "Mining Manager");
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({
+    name: "",
+    email: "",
+    role: "Mining Manager" as UserRole,
+    status: "Active",
+    assignedPlantIds: [] as string[],
+  });
+  const [profileMessage, setProfileMessage] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [resetPasswordDraft, setResetPasswordDraft] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetPasswordError, setResetPasswordError] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   if (!target) {
     return <NotFoundCard title="Manager not found" body="The selected manager could not be located." />;
@@ -5324,6 +5550,62 @@ function ManagerDetailPage() {
   const assignedPlantsList = plants.filter((plant) => assignedIds.includes(plant.id));
   const ownedDocuments = documents.filter((document) => document.uploadedById === target.id);
   const scopedDocuments = documents.filter((document) => assignedIds.includes(document.plantId));
+
+  useEffect(() => {
+    setProfileDraft({
+      name: target.name,
+      email: target.email,
+      role: target.role,
+      status: target.status,
+      assignedPlantIds: target.assignedPlantIds || (target.plantId ? [target.plantId] : []),
+    });
+    setProfileMessage("");
+    setEditingProfile(false);
+  }, [target]);
+
+  async function handleSaveProfile() {
+    setProfileMessage("");
+    setSavingProfile(true);
+    try {
+      await usersApi.update(target.id, {
+        name: profileDraft.name,
+        email: profileDraft.email,
+        role: user.role === "Admin" ? profileDraft.role : undefined,
+        status: profileDraft.status,
+        assignedPlantIds: profileDraft.assignedPlantIds,
+      });
+      setProfileMessage("Profile updated successfully.");
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : "Unable to update this user.");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    const trimmed = resetPasswordDraft.trim();
+    const confirmed = resetPasswordConfirm.trim();
+    if (!trimmed || trimmed.length < 8) {
+      setResetPasswordError("Temporary password must be at least 8 characters long.");
+      return;
+    }
+    if (trimmed !== confirmed) {
+      setResetPasswordError("Password confirmation does not match.");
+      return;
+    }
+    setResetPasswordError("");
+    setResettingPassword(true);
+    try {
+      await usersApi.resetPassword(target.id, { newPassword: trimmed, confirmPassword: confirmed });
+      setResetPasswordDraft("");
+      setResetPasswordConfirm("");
+      setResetPasswordError("Password reset successfully.");
+    } catch (error) {
+      setResetPasswordError(error instanceof Error ? error.message : "Unable to reset password.");
+    } finally {
+      setResettingPassword(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -5343,6 +5625,165 @@ function ManagerDetailPage() {
               <div><span className="font-semibold text-slate-900">Primary plant:</span> {target.plant || "All plants"}</div>
               <div><span className="font-semibold text-slate-900">Updated:</span> {formatDate(target.updatedAt || null)}</div>
             </div>
+            {(user.role === "Admin" || user.role === "CEO") ? (
+              <div className="mt-6 space-y-3 rounded-3xl border border-amber-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-slate-900">Profile management</div>
+                  {!editingProfile ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingProfile(true);
+                        setProfileMessage("");
+                      }}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Edit profile
+                    </button>
+                  ) : null}
+                </div>
+                {editingProfile ? (
+                  <>
+                    <input
+                      type="text"
+                      value={profileDraft.name}
+                      onChange={(event) => {
+                        setProfileDraft((current) => ({ ...current, name: event.target.value }));
+                        setProfileMessage("");
+                      }}
+                      placeholder="Full name"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                    />
+                    <input
+                      type="email"
+                      value={profileDraft.email}
+                      onChange={(event) => {
+                        setProfileDraft((current) => ({ ...current, email: event.target.value }));
+                        setProfileMessage("");
+                      }}
+                      placeholder="Email address"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                    />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <select
+                        value={profileDraft.status}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, status: event.target.value }));
+                          setProfileMessage("");
+                        }}
+                        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                      >
+                        <option value="Active">Active</option>
+                        <option value="Disabled">Disabled</option>
+                      </select>
+                      {user.role === "Admin" ? (
+                        <select
+                          value={profileDraft.role}
+                          onChange={(event) => {
+                            setProfileDraft((current) => ({ ...current, role: event.target.value as UserRole }));
+                            setProfileMessage("");
+                          }}
+                          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                        >
+                          <option value="Mining Manager">Mining Manager</option>
+                          <option value="CEO">CEO</option>
+                          <option value="Admin">Admin</option>
+                        </select>
+                      ) : null}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-slate-700">Assigned plants</div>
+                      <div className="grid max-h-40 gap-2 overflow-auto rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        {plants.map((plant) => (
+                          <label key={`detail-plant-${plant.id}`} className="flex items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 text-sm text-slate-700">
+                            <span>{plant.name}</span>
+                            <input
+                              type="checkbox"
+                              checked={profileDraft.assignedPlantIds.includes(plant.id)}
+                              onChange={(event) => {
+                                setProfileDraft((current) => ({
+                                  ...current,
+                                  assignedPlantIds: event.target.checked
+                                    ? [...current.assignedPlantIds, plant.id]
+                                    : current.assignedPlantIds.filter((id) => id !== plant.id),
+                                }));
+                                setProfileMessage("");
+                              }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    {profileMessage ? (
+                      <div className={`text-sm ${profileMessage === "Profile updated successfully." ? "text-emerald-700" : "text-rose-700"}`}>
+                        {profileMessage}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveProfile()}
+                        disabled={savingProfile}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {savingProfile ? "Saving..." : "Save profile changes"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingProfile(false);
+                          setProfileDraft({
+                            name: target.name,
+                            email: target.email,
+                            role: target.role,
+                            status: target.status,
+                            assignedPlantIds: target.assignedPlantIds || (target.plantId ? [target.plantId] : []),
+                          });
+                          setProfileMessage("");
+                        }}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+                <div className="text-sm font-semibold text-slate-900">Reset temporary password</div>
+                <input
+                  type="password"
+                  value={resetPasswordDraft}
+                  onChange={(event) => {
+                    setResetPasswordDraft(event.target.value);
+                    setResetPasswordError("");
+                  }}
+                  placeholder="Temporary password"
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                />
+                <input
+                  type="password"
+                  value={resetPasswordConfirm}
+                  onChange={(event) => {
+                    setResetPasswordConfirm(event.target.value);
+                    setResetPasswordError("");
+                  }}
+                  placeholder="Confirm password"
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 outline-none transition focus:border-teal-500"
+                />
+                {resetPasswordError ? (
+                  <div className={`text-sm ${resetPasswordError === "Password reset successfully." ? "text-emerald-700" : "text-rose-700"}`}>
+                    {resetPasswordError}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleResetPassword()}
+                  disabled={resettingPassword}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {resettingPassword ? "Resetting..." : "Reset password"}
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="rounded-[28px] border border-slate-200 bg-white p-5">
             <div className="text-lg font-semibold text-slate-900">Assigned plants</div>
@@ -6697,25 +7138,26 @@ function AppContent() {
           { path: "login", element: <Navigate to={defaultHome(user.role)} replace /> },
           { path: "dashboard", element: <DashboardPage /> },
           { path: "plants", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><PlantIndexPage /></RoleGate> },
+          { path: "projects", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><ProjectsIndexPage /></RoleGate> },
           { path: "plants/:plantId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><PlantProjectsPage /></RoleGate> },
           { path: "plants/:plantId/projects/new", element: <RoleGate allowed={["Mining Manager"]} capability="canCreateProjects"><ProjectCreatePage /></RoleGate> },
           { path: "plants/:plantId/projects/:projectId/documents", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><ProjectDocumentsPage /></RoleGate> },
           { path: "documents", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentsPage /></RoleGate> },
           { path: "documents/:documentId", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><DocumentDetailPage /></RoleGate> },
-          { path: "analytics", element: <RoleGate allowed={["CEO"]}><AnalyticsPage /></RoleGate> },
+          { path: "analytics", element: <RoleGate allowed={["CEO", "Admin"]}><AnalyticsPage /></RoleGate> },
           { path: "oversight", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "oversight/:userId", element: <RoleGate allowed={["CEO", "Admin"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
-          { path: "activity-logs", element: <RoleGate allowed={["CEO"]}><ActivityLogsPage /></RoleGate> },
-          { path: "upload", element: <RoleGate allowed={["Mining Manager"]} capability="canUploadDocuments"><ManagerUpload /></RoleGate> },
+          { path: "activity-logs", element: <RoleGate allowed={["CEO", "Admin"]}><ActivityLogsPage /></RoleGate> },
+          { path: "upload", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]} capability="canUploadDocuments"><ManagerUpload /></RoleGate> },
           { path: "admin", element: <RoleGate allowed={["Admin"]}><AdminDashboardPage /></RoleGate> },
           { path: "admin/users", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerOversightPage /></RoleGate> },
           { path: "admin/users/:userId", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><ManagerDetailPage /></RoleGate> },
           { path: "admin/master-data", element: <RoleGate allowed={["Admin", "CEO"]} capability="canManageUsers"><AdminMasterDataPage /></RoleGate> },
           { path: "admin/access", element: <RoleGate allowed={["Admin"]}><AdminAccessPage /></RoleGate> },
           { path: "admin/network", element: <RoleGate allowed={["Admin", "CEO"]} capability="canConfigureIp"><AdminNetworkPage /></RoleGate> },
-          { path: "admin/sessions", element: <RoleGate allowed={["Admin"]}><AdminSessionsPage /></RoleGate> },
+          { path: "admin/sessions", element: <RoleGate allowed={["CEO", "Admin"]}><AdminSessionsPage /></RoleGate> },
           { path: "admin/activity-logs", element: <RoleGate allowed={["Admin"]}><ActivityLogsPage /></RoleGate> },
-          { path: "settings", element: <RoleGate allowed={["CEO", "Mining Manager"]}><SettingsPage /></RoleGate> },
+          { path: "settings", element: <RoleGate allowed={["CEO", "Mining Manager", "Admin"]}><SettingsPage /></RoleGate> },
           { path: "admin/settings", element: <RoleGate allowed={["Admin"]}><SettingsPage /></RoleGate> },
           { path: "*", element: <Navigate to={defaultHome(user.role)} replace /> },
         ],

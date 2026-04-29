@@ -255,7 +255,7 @@ def toggle_user_status(user_id: str):
 
 
 @users_bp.post("/users/<user_id>/reset-password")
-@require_auth(["Admin"])
+@require_auth(["Admin", "CEO"])
 @require_capability("canManageUsers")
 def reset_user_password(user_id: str):
     db = get_db()
@@ -264,6 +264,10 @@ def reset_user_password(user_id: str):
         return error_response("User not found", 404)
 
     actor = _current_user()
+    allowed, message = _can_manage_user(actor, target)
+    if not allowed:
+        return error_response(message or "Forbidden", 403)
+
     if target["id"] == actor["id"]:
         return error_response("Use the profile security page to change your own password", 400)
 
